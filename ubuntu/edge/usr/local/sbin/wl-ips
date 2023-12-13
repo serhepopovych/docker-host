@@ -1,0 +1,147 @@
+#!/bin/sh
+
+# Requires: nft(8), sed(1)
+
+# Set options
+set -e
+set -u
+#set -x
+
+readonly \
+    set_prefix='/usr/local/etc/nftables.d/set'
+
+# Usage: nft {add|delete|list|commit} \
+#            [[[<family>]#[<table>]#]<set_name> [<element>...]]
+nft()
+{
+    local func="${FUNCNAME:-nft}"
+
+    local cmd
+    case "${1-}" in
+       'add'|'delete'|'list'|'commit')
+          cmd="$1"
+          ;;
+       'del')
+          cmd='delete'
+          ;;
+       'lst')
+          cmd='list'
+          ;;
+       'cmt')
+          cmd='commit'
+          ;;
+       *)
+          cmd='' && cmd="${cmd:?1st arg to ${func}() is unsupported}"
+          ;;
+    esac
+
+    local family='' table='' set_name
+    case "${2-}" in
+        *'#'*'#'*)
+          family="${2%%#*}"
+          table="${2#*#}" && table="${table%%#*}"
+          set_name="${2##*#}"
+          ;;
+        '')
+          ;;
+        *)
+          set_name="$2"
+          ;;
+    esac
+    set_name="${set_name:?missing 2d arg to ${func}() <set_name>}"
+    family="${family:-inet}"
+    table="${table:-filter}"
+
+    shift 2
+
+    local rc=0
+    case "$cmd" in
+        'list'|'commit')
+            if [ $# -ne 0 ]; then
+                cmd='' && cmd="${cmd:?extra arguments to ${func} $cmd ...}"
+            fi
+
+            exec 5>&1
+            eval $(
+                exec 3>&1 1>&-
+                {
+                    set +e
+                    command nft list set \
+                        "$family" "$table" "$set_name" 2>/dev/null
+                    echo "rc=$?" >&3
+                } | {
+                    if [ "$cmd" = 'list' ]; then
+                        cmd='p'
+                        set_file='/dev/fd/5'
+                    else
+                        cmd='1b;$q;p'
+                        set_file="$set_prefix.$set_name"
+                    fi
+
+                    umask 0077
+
+                    sed -n -e "$cmd" >"$set_file"
+                }
+                exec 3>&-
+            )
+            exec 5>&-
+            ;;
+        *)
+            if [ $# -eq 0 ]; then
+                cmd='' && cmd="${cmd:?no arguments to ${func} $cmd ...}"
+            fi
+
+            local ifs="$IFS"
+            IFS=','
+            command nft "$cmd" element \
+                "$family" "$table" "$set_name" "{ $* }" ||
+            rc=$?
+            IFS="$ifs"
+            ;;
+    esac
+
+    return $rc
+}
+
+################################################################################
+
+prog_name="${0##*/}"
+
+# Usage: usage
+usage()
+{
+    local rc=$?
+
+    local fd
+    [ $rc -eq 0 ] && fd=1 || fd=2
+
+    echo >&$fd "
+Usage: $prog_name {add|del} [[<family>]#[<table>]#]<set_name> <ip|net|elem>...
+       $prog_name {lst|cmt} <set_name>
+
+Available sets for whitelisting IPs:
+"
+    local set
+    for set in $set_prefix.*; do
+        [ -f "$set" ] && echo "    ${set#$set_prefix.}" ||:
+    done
+    echo
+
+    exit $rc
+}
+[ $# -ge 2 ] || usage
+
+# See how we've called
+case "$1" in
+    'add'|'del')
+        nft "$@" && nft commit "$2" || exit
+        ;;
+    'lst'|'cmt')
+        nft "$@" || exit
+        ;;
+    *)
+        ! : || usage
+        ;;
+esac
+
+exit 0

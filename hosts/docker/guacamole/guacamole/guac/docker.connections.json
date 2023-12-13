@@ -1,0 +1,18 @@
+{
+  "name": "docker.local",
+  "parentIdentifier": "ROOT",
+  "protocol": "ssh",
+  "parameters": {
+    "enable-sftp": "true",
+    "hostname": "@hostname@"
+  },
+  "attributes": {
+    "guacd-encryption": null,
+    "failover-only": null,
+    "weight": null,
+    "max-connections": "5",
+    "guacd-hostname": null,
+    "guacd-port": null,
+    "max-connections-per-user": "2"
+  }
+}

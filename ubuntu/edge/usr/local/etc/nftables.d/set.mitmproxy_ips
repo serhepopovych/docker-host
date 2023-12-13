@@ -1,0 +1,4 @@
+	set mitmproxy_ips {
+		type ipv4_addr
+		size 102400
+	}

@@ -1,0 +1,729 @@
+#!/bin/bash
+
+[ -z "${__distro_postinst__-}" ] || return 0
+__distro_postinst__=1
+
+## Global config
+
+# Initial user account that can be used by automation setup services.
+user='admin'
+
+## Common helper routines
+
+true()  {   :; }
+false() { ! :; }
+
+# Usage: msg <fmt> ...
+msg()
+{
+    local rc=$?
+
+    local func="${FUNCNAME:-msg}"
+
+    local fmt="${1:?missing 1st arg to ${func}() (<fmt>)}"
+    shift
+
+    [ $V -le 0 ] || printf -- "$fmt" "$@"
+
+    return $rc
+}
+V=1
+
+# Usage: info <fmt> ...
+info()
+{
+    msg "$@"
+}
+
+# Usage: error <fmt> ...
+error()
+{
+    msg "$@" >&2
+}
+
+# Usage: fatal <fmt> ...
+fatal()
+{
+    local rc=$?
+    printf >&2 -- '%s: ' "$prog_name"
+    error "$@"
+    exit $rc
+}
+
+## Boot command line parameters handling helpers
+
+_cmdline_file='/proc/cmdline'
+cmdline_file="${cmdline_file:-${_cmdline_file}}"
+cmdline_file="${root}${cmdline_file#$root}"
+
+# Usage: cmdline_get_console [<file>]
+cmdline_get_console()
+{
+    local func="${FUNCNAME:-cmdline_get_console}"
+
+    local file="${1:-$cmdline_file}"
+
+    # Based on grub-installer udeb code.
+
+    eval set -- $(cat "$file")
+
+    local serial=
+
+    # Get the last 'console=' entry (if none, the whole string is returned)
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            console=ttyS*|console=hvc*|console=com*)
+                serial="$1"
+                ;;
+        esac
+        shift
+    done
+
+    if [ -n "$serial" ]; then
+        echo "$serial"
+    fi
+}
+
+## Grub helpers
+
+# Usage: grub_update ...
+grub_update()
+{
+    in_chroot "$root" "
+          if type update-grub2 >/dev/null 2>&1; then
+            update-grub2
+        elif type update-grub >/dev/null 2>&1; then
+            update-grub
+        else
+            f=\"\$(readlink '/etc/grub2.cfg' 2>/dev/null)\" &&
+                [ -n \"\$f\" ] ||
+            f='/boot/grub2/grub.cfg'
+
+            grub2-mkconfig -o \"\$f\"
+        fi
+    "
+}
+
+# Usage: grub_serial_console <console=...>
+grub_serial_console()
+{
+    local func="${FUNCNAME:-grub_serial_console}"
+
+    local serconsole="${1:?missing 1st arg to ${func}() <console=...>}"
+    shift
+
+    local unit=''
+
+    set -- $(IFS=',' && echo $serconsole)
+    if [ $# -gt 2 ] || [ -n "${1##console=*}" ]; then
+        : "${unit:?${func}: not in console=device[,...] format}"
+    fi
+
+    local unit="${1##console=*[!0-9]}"
+    if [ -n "${unit#*[!0-9]*}" ]; then
+        : "${unit:?${func}: no unit number in $1}"
+    fi
+
+    local speed='' parity='n' word='8'
+    if [ -n "${2-}" ]; then
+        speed="${2%%[!0-9]*}"
+
+        parity="${2#$speed}"
+        word="$parity"
+
+        parity="${parity%%[0-9]*}"
+        word="${word#$parity}"
+        word="${word%%[!0-9]*}"
+    fi
+    speed="--speed=${speed:-115200}"
+    case "$parity" in
+        n) parity=' --parity=no'   ;;
+        e) parity=' --parity=even' ;;
+        o) parity=' --parity=odd'  ;;
+        *) parity=''               ;;
+    esac
+    [ -z "$word" ] || word=" --word=$word"
+
+    echo "serial --unit=$unit $speed$word$parity --stop=1"
+}
+
+## Shell-style file handling helpers
+
+if by="${0##*/}" && [ -n "${by##*bash*}" ]; then
+    by="by $by"
+else
+    by='by distro.postinst'
+fi
+
+# Usage: shell_var_replace <file> <opt> <val>
+shell_var_replace()
+{
+    local func="${FUNCNAME:-shell_var_replace}"
+
+    local file="${1:?missing 1st arg to ${func}() <file>}"
+    local opt="${2:?missing 2d arg to ${func}() <opt>}"
+    local val="${3:?missing 3rd arg to ${func}() <val>}"
+
+    if [ -f "$file" ]; then
+        local o="$opt"
+        opt="${opt#\#}"
+
+        sed -i "$file" \
+            -e "s/^\s*$opt=/#commented $by#&/" \
+            -e "\$a\\
+\\
+#replaced $by#\\
+$o=\"$val\"" \
+            #
+    fi
+}
+
+# Usage: shell_var_extend() <file> <opt> <val>
+shell_var_extend()
+{
+    local func="${FUNCNAME:-shell_var_extend}"
+
+    local file="${1:?missing 1st arg to ${func}() <file>}"
+    local opt="${2:?missing 2d arg to ${func}() <opt>}"
+    local val="${3:?missing 3rd arg to ${func}() <val>}"
+
+    if [ -f "$file" ]; then
+        local o="$opt"
+        opt="${opt#\#}"
+
+        echo >>"$file"
+        echo >>"$file" "#extended $by#"
+        echo >>"$file" "$o=\"\${$opt:+\$$opt }$val\""
+    fi
+}
+
+## Environment helpers
+
+# Usage: _env [NAME=VALUE]... [COMMAND [ARG]...]
+_env()
+{
+    local _env_exec="${_env_exec-}"
+    [ -z "${_env_exec}" ] || _env_exec='exec'
+
+    local H="${helpers_dir:+${helpers_dir%/}}"
+    local P='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+
+    ${_env_exec} env -i \
+        TERM="${TERM:-vt220}" \
+        PATH="${H:+$H:}$P" \
+        USER="${USER:-root}" \
+        HOME='/' \
+        LANG='C' \
+        "$@"
+        #
+}
+
+# Usage: in_env ...
+in_env()
+{
+    local _env_exec=''
+    _env "$@" || return
+}
+
+# Usage: in_env_exec ...
+in_env_exec()
+{
+    local _env_exec='1'
+    _env "$@" || return
+}
+
+## Chroot helpers
+
+# Usage: _in_chroot [NAME=VALUE]... [--] <dir> <cmd> [-|command name] [<arg> ...]
+_in_chroot()
+{
+    local func="${func:-${FUNCNAME:-_in_chroot}}"
+
+    local env_vars=''
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            [[:alpha:]_]*=*)
+                env_vars="${env_vars:+$env_vars }'$1'"
+                ;;
+            --)
+                shift
+                break
+                ;;
+            # errors
+            --*)
+                printf >&2 -- '%s: unknown option: %s\n' "$func" "$1"
+                return 1
+                ;;
+            *)
+                break
+                ;;
+        esac
+        shift
+    done
+
+    local dir="${1:?missing 1st arg to ${func}() <dir>}"
+    local cmd="${2:?missing 2d arg to ${func}() <cmd>}"
+    shift 2
+
+    local helpers_dir="/${helpers_dir#$root}"
+    local _env_exec="${_in_chroot_exec-}"
+
+    eval "
+        _env $env_vars \
+        setarch '$basearch' \
+            chroot '$dir' /bin/sh -c \"\$cmd\" \"\$@\" ||
+        return
+    "
+}
+
+# Usage: in_chroot <dir> <cmd> [<arg> ...]
+in_chroot()
+{
+    local func="${FUNCNAME:-in_chroot}"
+    local _in_chroot_exec=''
+    _in_chroot "$@" || return
+}
+
+# Usage: in_chroot_exec <dir> <cmd> [<arg> ...]
+in_chroot_exec()
+{
+    local func="${FUNCNAME:-in_chroot_exec}"
+    local _in_chroot_exec='1'
+    _in_chroot "$@" || return
+}
+
+## Init manager helpers
+
+systemd_lib_unit='/lib/systemd/system'
+systemd_etc_unit='/etc/systemd/system'
+
+# Usage: systemd_unit_cleanup <unit1> <unit2> ...
+systemd_unit_cleanup()
+{
+    # Do cleanup if enabled.
+    [ -n "${systemd_do_unit_cleanup+x}" ] || return 0
+
+    local func="${FUNCNAME:-systemd_unit_cleanup}"
+
+    local u="${systemd_unit:-$systemd_lib_unit}"
+    local p="${systemd_root-}/${u#/}"
+
+    # Supported systemd.unit(5) directives vary from version to version.
+    #
+    # If local package (e.g. openvpn) being installed provides unit
+    # file targeted more recent systemd(1) console is filled by systemd(1)
+    # with warnings about unsupported directives.
+    #
+    # This helper intended to cleanup specified units to keep them only
+    # with most common directives. Tested on Debian GNU/Linu 7.x (wheezy)
+    # and local packages (e.g. openvpn) from 10.x (buster).
+
+    local f
+    for f in "$@"; do
+        f="$p/$f"
+
+        if [ -f "$f" ]; then
+            sed -i "$f" \
+                -e '/^Documentation=/           s/^/#/' \
+                -e '/^Protect\(System\|Home\)=/ s/^/#/' \
+                -e '/^KillMode=/                s/^/#/' \
+                -e '/^Delegate=/                s/^/#/' \
+                -e '/^PartOf=/                  s/^/#/' \
+                -e '/^ReloadPropagatedFrom=/    s/^/#/' \
+                #
+
+            grep -q '^Type=oneshot' "$f" || continue
+
+            sed -i "$f" \
+                -e '/^ExecReload=/d' \
+                #
+        fi
+    done
+}
+
+# Usage: systemd_unit_get <section> <attribute> <unit1> <unit2> ...
+systemd_unit_get()
+{
+    local func="${FUNCNAME:-systemd_unit_get}"
+
+    local u="${systemd_unit:-$systemd_lib_unit}"
+    local p="${systemd_root-}/${u#/}"
+
+    local section="${1:?missing 1st arg to ${func}() <section>}"
+    local attribute="${2:?missing 2d arg to ${func}() <attribute>}"
+    shift 2
+
+    local f t=' '
+    for f in "$@"; do
+        [ -n "${t##* $f *}" ] || continue
+
+        t="$t$f "
+
+        f="$p/$f"
+        if [ -f "$f" ]; then
+            echo "$f"
+        fi
+    done | xargs sed -n -e "/\\[$section\\]/,/\\[/ s/^$attribute=//p"
+}
+
+# Usage: systemd_unit_list <section> <attribute> <unit1> <unit2> ...
+systemd_unit_list()
+{
+    local func="${FUNCNAME:-systemd_unit_list}"
+
+    local section="${1:?missing 1st arg to ${func}() <section>}"
+    local attribute="${2:?missing 2d arg to ${func}() <attribute>}"
+    shift 2
+
+    local e="${systemd_root-}/${systemd_etc_unit#/}"
+    local l="${systemd_root-}/${systemd_lib_unit#/}"
+
+    local f u=''
+
+    local sul_tt="${sul_tt:- }"
+    local et=' ' et_dir="$systemd_etc_unit"
+    local lt=' ' lt_dir="$systemd_lib_unit"
+
+    for f in "$@"; do
+        f="${f##*/}"
+
+        [ -n "${sul_tt##* $f *}" ] || continue
+
+          if [ -f "$e/$f" ]; then
+            et="$et$f "
+        elif [ -f "$l/$f" ]; then
+            lt="$lt$f "
+        else
+            continue
+        fi
+
+        sul_tt="$sul_tt$f "
+    done
+
+    for f in 'et' 'lt'; do
+        u=$u$(
+                # u is in subshell is not the same as outside
+                eval "
+                    u="\$${f}"
+                    if [ -n \"\$u\" ]; then
+                        systemd_unit=\"\$${f}_dir\"
+                        systemd_unit_get \"\$section\" \"\$attribute\" \$u
+                    fi
+                "
+             )
+    done
+
+    if [ -z "$u" ]; then
+        echo $sul_tt
+    else
+        "$func" "$section" "$attribute" $u
+    fi
+}
+
+# Usage: systemd_unit_find <section> <attribute> <unit1> <unit2> ...
+systemd_unit_find()
+{
+    local f u
+
+    for f in $(systemd_unit_list "$@"); do
+        for u in \
+            "$systemd_etc_unit" \
+            "$systemd_lib_unit" \
+            #
+        do
+            u="$u/$f" && [ -f "$u" ] && echo "$u" || :
+        done
+    done
+}
+
+# Usage: systemd_unit_enable <unit1> <unit2> ...
+systemd_unit_enable()
+{
+    local func="${FUNCNAME:-systemd_unit_enable}"
+
+    local u="${systemd_unit:-$systemd_etc_unit}"
+    local p="${systemd_root-}/${u#/}"
+    u="$systemd_lib_unit"
+
+    local rc=0
+
+    local f t u
+    for f in $(systemd_unit_find 'Install' 'Also' "$@"); do
+        u="${f##*/}"
+        for t in \
+            $(
+                systemd_unit="${f%/$u}"
+                systemd_unit_get 'Install' 'WantedBy' "$u"
+             )
+        do
+            t="$p/$t.wants"
+
+            install -d "$t" && ln -sf "$f" "$t/$u" || rc=$((rc + $?))
+        done
+    done
+
+    return $rc
+}
+
+# Usage: systemd_unit_disable <unit1> <unit2> ...
+systemd_unit_disable()
+{
+    local func="${FUNCNAME:-systemd_unit_disable}"
+
+    local u="${systemd_unit:-$systemd_etc_unit}"
+    local p="${systemd_root-}/${u#/}"
+
+    local rc=0
+
+    local u
+    for u in $(systemd_unit_list 'Install' 'Also' "$@"); do
+        for u in "$p"/*.target.wants/$u; do
+            [ ! -L "$u" ] || rm -f "$u" || rc=$((rc + $?))
+        done
+    done
+
+    return $rc
+}
+
+# Usage: systemctl_enable <unit1> <unit2> ...
+systemctl_enable()
+{
+    local systemd_root="${root-}"
+    systemd_unit_enable "$@" || return
+}
+
+# Usage: systemctl_disable <unit1> <unit2> ...
+systemctl_disable()
+{
+    local systemd_root="${root-}"
+    systemd_unit_disable "$@" || return
+}
+
+# Usage: service_enable <name>
+service_enable()
+{
+    local func="${FUNCNAME:-service_enable}"
+
+    local f="${1:?missing 1st arg to ${func}() <name>}"
+
+    local rc=0
+
+    case "${f##*.}" in
+        'service'|"$f")
+            f="${f%.service}"
+            chroot "${root:-/}" update-rc.d "$f" defaults &&
+            chroot "${root:-/}" update-rc.d "$f" enable || rc=$?
+            f="$f.service"
+            ;;
+    esac
+
+    local systemd_root="${root-}"
+
+    systemd_unit_cleanup "$f"
+    systemd_unit_enable  "$f" || return $((rc + $?))
+}
+
+# Usage: service_disable <name>
+service_disable()
+{
+    local func="${FUNCNAME:-service_disable}"
+
+    local f="${1:?missing 1st arg to ${func}() <name>}"
+
+    local rc=0
+
+    case "${f##*.}" in
+        'service'|"$f")
+            f="${f%.service}"
+            chroot "${root:-/}" update-rc.d "$f" disable || rc=$?
+            f="$f.service"
+            ;;
+    esac
+
+    local systemd_root="${root-}"
+
+    systemd_unit_cleanup "$f"
+    systemd_unit_disable "$f" || return $((rc + $?))
+}
+
+## Secure Shell (SSH) helpers
+
+# Usage: ssh_agent_start4bashrc() [<user1>|<file1>] [<user2>|<file1>] ...
+ssh_agent_start4bashrc()
+{
+    local func="${FUNCNAME:-ssh_agent_start4bashrc}"
+
+    local t p f
+
+    for f in "$@"; do
+        # Skip empty arguments
+        [ -n "$f" ] || continue
+
+        # Resolve username or directory to .bashrc file
+        t=''
+        while :; do
+            p="$root${f#/}"
+
+              if [ -f "$p" ]; then
+                t=''
+                break
+            elif [ -d "$p" ]; then
+                f="$f/.bashrc"
+            else
+                # Stop on non-first attempt
+                [ -z "$t" ] || break
+
+                # User or it's home does not exist
+                f="~$f" && t="$(in_chroot "$root" "echo $f")" &&
+                    [ "$f" != "$t" ] ||
+                break
+            fi
+        done
+        [ -z "$t" ] || continue
+
+        # Skip already patched files
+        t="$(sed -n -e '/^# Start ssh-agent for non-X11 session/{p;q}' "$p")"
+        [ -z "$t" ] || continue
+
+        # Keep it disabled by default for compatibility
+        t="${p%/*}/.ssh/ssh-agent.env"
+        rm -f "$t" ||:
+        install -D -m 0644 /dev/null "$t" ||:
+
+        # Patch .bashrc file at known location instead of appending
+        sed -i "$p" \
+            -e 'N' \
+            -e '/^\s\+\. ~\/\.bash_aliases\s\+fi$/!{P;D}' \
+            -e 'r /dev/stdin' \
+        <<'_EOF'
+
+# Start ssh-agent for non-X11 session unless ...
+if [ -z "${DISPLAY-}" ]; then
+    ssh_agent=''
+    # Note that is is up to user to ensure that ~/.ssh isn't world writeable.
+    ssh_agent_env=~/.ssh/ssh-agent.env
+
+    while :; do
+        # Socket by agent or sshd forwarded connection.
+        # In latter case SSH_AGENT_PID isn't available.
+        if [ -S "${SSH_AUTH_SOCK-}" ]; then
+            break
+        fi
+        # Cleanup if not running or running but no socket.
+        if [ -n "${ssh_agent##*/*}" ]; then
+            unset SSH_AUTH_SOCK SSH_AGENT_PID
+            break
+        fi
+        # Source environment.
+        if [ -r "$ssh_agent_env" ]; then
+            eval $(
+                . "$ssh_agent_env" >/dev/null
+
+                [ -z "${SSH_AGENT_PID-}" ] ||
+                [ -z "${SSH_AGENT_PID##*\'*}" ] ||
+                    echo "export SSH_AGENT_PID='$SSH_AGENT_PID'"
+
+                [ -z "${SSH_AUTH_SOCK-}" ] ||
+                [ -z "${SSH_AUTH_SOCK##*\'*}" ] ||
+                    echo "export SSH_AUTH_SOCK='$SSH_AUTH_SOCK'"
+            )
+        fi
+
+        if [ -n "${SSH_AGENT_PID-}" ] &&
+           kill -0 "$SSH_AGENT_PID" 2>/dev/null
+        then
+            # ... already running
+            ssh_agent='running'
+        else
+            # ... first attempt to start failed.
+            [ -z "$ssh_agent" ] &&
+            # ... disabled (e.g. with ln -sf /dev/null ~/.ssh/ssh-agent.env).
+            [ ! -e "$ssh_agent_env" -o -s "$ssh_agent_env" ] &&
+            # ... it exists and started successfuly.
+            ssh_agent="$(command -v ssh-agent)" &&
+                [ -x "$ssh_agent" ] &&
+                mkdir -p "${ssh_agent_env%/*}" &&
+                rm -f "$ssh_agent_env" &&
+                (
+                    # Make sure agent settings readable only by user
+                    umask 0077 && "$ssh_agent" -s >"$ssh_agent_env"
+                ) ||
+            ssh_agent='not running'
+
+            # Make sure we source environment.
+            unset SSH_AUTH_SOCK
+        fi
+    done
+
+    unset ssh_agent ssh_agent_env
+fi
+_EOF
+    done
+}
+
+## Debian-installer helpers
+
+# Usage: apt ...
+apt()
+{
+    in_chroot "$root" '
+        DEBIAN_FRONTEND=noninteractive \
+            apt-get -qq "$@"
+    ' - "$@" || return
+}
+
+## Initial setup
+
+# Must be started by root (uid 0)
+[ "$(id -u)" = 0 ] || fatal 'Only root (uid 0) can use this service\n'
+
+# $this*, $prog*
+for t in \
+    'this' \
+    'this_dir' \
+    'prog_name' \
+    'prog_version' \
+    #
+do
+    eval "[ -n \"\${$t-}\" ]" ||
+        fatal '$%s is not defined or empty\n' "$t"
+done
+
+# $root
+if [ -n "${root-}" ]; then
+    if [ ! -e "$root" ]; then
+        # Remove broken symlink
+        rm -f "$root" ||:
+    fi
+
+    # Make directory
+    install -d "$root" ||
+        fatal 'fail to create install root "%s"\n' "$root"
+
+    # Make path absolute
+    root="$(cd "$root" >/dev/null 2>&1 && echo "$PWD")" ||
+        fatal 'fail to resolve install root to absolute path\n'
+    root="${root%/}/"
+else
+    root='/'
+fi
+
+# $host
+[ -n "${host-}" ] ||
+host="$(hostname -s 2>/dev/null)" && [ -n "$host" ] ||
+    fatal 'cannot get short host name for host directory\n'
+
+host_dir="$this_dir/$host/" && [ -d "$host_dir" ] ||
+    fatal 'host directory "%s" does not exist\n' "$host"
+
+# $arch, $basearch
+arch="$(uname -m)"
+case "$arch" in
+    'x86_64') basearch='x86_64' ;;
+        i?86) basearch='i386'   ;;
+           *) fatal 'Unsupported architecture "%s"\n' "$arch" ;;
+esac
+
+## Exit/return successfuly
+
+:

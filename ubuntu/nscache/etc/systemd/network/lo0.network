@@ -1,0 +1,21 @@
+[Match]
+Name=lo0
+
+[Network]
+LinkLocalAddressing=no
+DHCP=no
+# time1.google.com
+Address=216.239.35.0/32
+# Google Public DNS
+Address=8.8.8.8/32
+Address=8.8.4.4/32
+# Cloudflare Public DNS
+Address=1.1.1.1/32
+Address=1.0.0.1/32
+# Lumen (Level3) Public DNS
+Address=4.2.2.6/32
+Address=4.2.2.5/32
+Address=4.2.2.4/32
+Address=4.2.2.3/32
+Address=4.2.2.2/32
+Address=4.2.2.1/32

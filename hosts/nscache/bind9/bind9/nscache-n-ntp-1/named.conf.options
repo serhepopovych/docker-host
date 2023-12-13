@@ -1,0 +1,93 @@
+acl mynets {
+	// localhost
+	127.0.0.0/8;
+	::1/128;
+	// AS64510
+	203.0.113.0/24;
+};
+
+options {
+	directory "/var/cache/bind";
+
+	// If there is a firewall between you and nameservers you want
+	// to talk to, you may need to fix the firewall to allow multiple
+	// ports to talk.  See http://www.kb.cert.org/vuls/id/800113
+
+	// Listen on specific IPs only
+	listen-on port 53 {
+		// Recursive
+		127.0.0.1;       // localhost
+		// Google Public DNS
+		8.8.8.8;
+		8.8.4.4;
+		// Cloudflare Public DNS
+		1.1.1.1;
+		1.0.0.1;
+		// Lumen (Level3) Public DNS
+		4.2.2.6;
+		4.2.2.5;
+		4.2.2.4;
+		4.2.2.3;
+		4.2.2.2;
+		4.2.2.1;
+	};
+	listen-on-v6 port 53 {
+		// Recursive
+		::1;             // localhost
+	};
+
+	// Query other NSes from specific IPs only
+	query-source 203.0.113.250;
+	query-source-v6 ::1;
+
+	//========================================================================
+	// If BIND logs error messages about the root key being expired,
+	// you will need to update your keys.  See https://www.isc.org/bind-keys
+	//========================================================================
+	//
+	dnssec-validation yes;
+
+	// Allow query
+	allow-query {
+		mynets;
+	};
+
+	// Enable recursion
+	recursion yes;
+	// ... controlling such queries it's scope
+	allow-recursion {
+		mynets;
+	};
+
+	// No zone change notifications
+	notify no;
+	// ... and transfers
+	allow-transfer {
+		none;
+	};
+	// ... nor notifying us
+	allow-notify {
+		none;
+	};
+
+	// BIND Response Policy Zone
+	response-policy {
+		zone "rpz.example.com";
+	} break-dnssec yes;
+
+	// max-ncache-ttl sets the maximum time (in seconds) for which the server
+	// will cache negative (NXDOMAIN) answers.
+	max-ncache-ttl 60;
+
+	// Hide BIND version
+	version "unknown";
+};
+
+// Do not query authoritative DNS servers using IPv6 (see also query-source-v6)
+server ::/0 {
+	bogus yes;
+};
+
+#server 0.0.0.0/0 {
+#	edns no;
+#};

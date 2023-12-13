@@ -1,0 +1,21 @@
+module.exports = {
+  apps : [{
+    name: "keeper",
+    interpreter: "none",
+    script: "%app_dir%/keeper.sh",
+    cwd: "%app_dir%",
+    watch: false,
+    autorestart: false,
+    cron_restart: "%cron_minute% 1 * * *",
+    log_date_format: "YYYY-MM-DDTHH:mm:ss"
+  },{
+    name: "reaper",
+    interpreter: "none",
+    script: "%app_dir%/reaper.sh",
+    cwd: "%app_dir%",
+    watch: false,
+    autorestart: false,
+    cron_restart: "%cron_minute% 0 * * *",
+    log_date_format: "YYYY-MM-DDTHH:mm:ss"
+  }]
+}

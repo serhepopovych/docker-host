@@ -1,0 +1,12 @@
+
+# req: none
+container_1='bird'
+
+# req: none
+container_2='chrony'
+
+# req: none
+container_3='bind9'
+
+# req: none
+container_4='pinger'

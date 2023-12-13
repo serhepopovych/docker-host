@@ -1,0 +1,5 @@
+	set direct_docker_http {
+		type inet_proto
+		size 1
+		elements = { tcp }
+	}

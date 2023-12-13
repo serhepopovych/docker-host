@@ -1,0 +1,37 @@
+This project contains full container build infrastructure using
+docker(1) as container management system.
+
+To deploy containers on fresh system (e.g. fresh installation of
+Ubuntu 20.04 or 22.04 LTS with docker.io package installed) you
+need to provide few configuration files:
+
+  for all containers:
+    /var/local/docker/_/profile
+	__host='dh'
+	__domain='example.com'
+	__fqdn="${__host}.${__domain}"
+
+  for nginx container:
+    /var/local/docker/nginx/profile
+	nginx_cbtsh_http_url='https://acme-le.gw.api.example.com/~letsencrypt'
+	nginx_cbtsh_http_auth='<http_basic_auth_password>'
+	nginx_cbtsh_ph='<cert_pkey_passphrase>'
+
+Provided above settings are bare minimum necessary to successfuly build
+and start containers using update.sh.
+
+You may wish to tune more settings by providing more shell variable
+assignments in /profile files (yes, these files sourced and evaluated
+in shell interpreter environment).
+
+Each container can be (re)build individually by running <ct_name>/ci/run.sh
+directly. See "<ct_name>/ci/run.sh --help" output for more details on
+options and parameters accepted. You may change /profile parameters by
+providing corresponding option value to run.sh.
+
+To update all containers (e.g. due to basic image security updates or new
+version of containerized software) simply run
+
+	./update.sh
+
+or run "<ct_name>/ci/run.sh" for individual container.

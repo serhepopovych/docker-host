@@ -1,0 +1,94 @@
+[Match]
+Name=rpf
+
+[Network]
+LinkLocalAddressing=no
+DHCP=no
+
+[RoutingPolicyRule]
+Family=ipv4
+Priority=32752
+Table=240
+
+# rfc1918
+[Route]
+Destination=172.22.71.0/24
+Type=throw
+Table=240
+
+[Route]
+Destination=172.27.27.0/24
+Type=throw
+Table=240
+
+[Route]
+Destination=172.17.0.0/16
+Type=throw
+Table=240
+
+[Route]
+Destination=10.0.0.0/8
+Type=unicast
+Table=240
+
+[Route]
+Destination=172.16.0.0/12
+Type=unicast
+Table=240
+
+[Route]
+Destination=192.168.0.0/16
+Type=unicast
+Table=240
+
+# rfc5737
+[Route]
+Destination=192.0.2.0/24
+Type=throw
+Table=240
+
+[Route]
+Destination=198.51.100.0/24
+Type=local
+Table=local
+
+[Route]
+Destination=203.0.113.0/24
+Type=local
+Table=local
+
+# rfc6598
+[Route]
+Destination=100.64.0.0/10
+Type=unicast
+Table=240
+
+# rfc2544
+[Route]
+Destination=198.18.0.0/15
+Type=unicast
+Table=240
+
+# rfc3927
+[Route]
+Destination=169.254.0.0/16
+Type=unicast
+Table=240
+
+# rfc6890
+[Route]
+Destination=192.0.0.0/24
+Type=unicast
+Table=240
+
+# rfc7526
+[Route]
+Destination=192.88.99.0/24
+Type=unicast
+Table=240
+
+# multicast
+[Route]
+Destination=224.0.0.0/3
+Type=unicast
+Table=240

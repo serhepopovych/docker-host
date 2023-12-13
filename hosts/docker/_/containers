@@ -1,0 +1,22 @@
+
+# req: none
+container_1='mariadb'
+
+# req: mariadb(mgmt)
+container_2='phpmyadmin'
+
+# req: mariadb(data)
+container_3='guacamole'
+
+# req: guacamole(conn IPs)
+#      phpmyadmin(www+fcgi)
+container_4='nginx'
+
+## req: local/nfs(e.g. target) and/or nfs(storage)
+#container_5='keeper'
+
+# Below isn't commonly used services and should be enabled
+# explicitly for instances that require it.
+#
+## req: nfs(reports)
+#container_6='sftp'

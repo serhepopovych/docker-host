@@ -1,0 +1,4 @@
+[NetDev]
+Description=Loopback0
+Name=lo0
+Kind=dummy

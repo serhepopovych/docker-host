@@ -1,0 +1,62 @@
+#!/bin/sh
+
+# Requires: docker(1)
+
+# Set options
+set -e
+set -u
+#set -x
+
+readonly \
+    pinger='pinger'
+
+# Usage: msg <fmt> ...
+msg()
+{
+    local rc=$?
+
+    local func="${FUNCNAME:-msg}"
+
+    local fmt="${1:?missing 1st arg to ${func}() (<fmt>)}"
+    shift
+
+    [ $V -le 0 ] || printf -- "$fmt" "$@"
+
+    return $rc
+}
+V=1
+
+# Usage: error <fmt> ...
+error()
+{
+    msg "$@" >&2
+}
+
+# Usage: docker_container_running <name> [<fmt> ...]
+docker_container_running()
+{
+    local func="${FUNCNAME:-docker_container_running}"
+
+    local name="${1:?missing 1st arg to ${func}() <name>}" && shift
+    if [ -n "${1+x}" ]; then
+        local fmt="$1" && shift
+    else
+        local fmt='' && set --
+    fi
+
+    local pid="$(
+        docker inspect \
+            --type='container' \
+            --format='{{.State.Pid}}' \
+            "$name" 2>&1
+    )" && [ "$pid" != '0' ] ||
+    error "container '%s' isn't running${fmt:+: $fmt}\n" "$name" "$@" || return
+}
+
+################################################################################
+
+docker_container_running "$pinger" || exit
+
+[ $# -gt 0 ] || set -- 'bash'
+
+exec docker exec -it "$pinger" "$@"

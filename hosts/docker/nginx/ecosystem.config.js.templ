@@ -1,0 +1,18 @@
+module.exports = {
+  apps : [{
+    name: "certbotsh",
+    interpreter: "none",
+    script: "/usr/local/sbin/certbotsh-update",
+    watch: false,
+    autorestart: false,
+    cron_restart: "%cbt_cron_minute% */6 * * *",
+  },{
+    name: "nginx",
+    interpreter: "none",
+    script: "/usr/sbin/nginx",
+    args: [ "-g", "daemon off;" ],
+    cwd: "/etc/nginx",
+    watch: false,
+    pid_file: "/var/run/nginx.pid",
+  }]
+}

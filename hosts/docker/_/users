@@ -1,0 +1,12 @@
+
+# admin
+username_1='admin'
+email_1='admin@example.com'
+fullname_1='Administrator'
+group_1='ops'
+
+# user
+username_2='user'
+email_2='user@example.com'
+fullname_2='User'
+group_2='devs'

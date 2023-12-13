@@ -1,0 +1,10 @@
+# Try named(8) first, then fallback to systemd-resolved(8).
+#
+# See /etc/systemd/resolved.conf.d/*.conf for details on how to configure
+# systemd-resolved(8) to ignore nameserver directive from this file
+# (especially 127.0.0.1) in foreign mode.
+
+nameserver 127.0.0.1
+nameserver 127.0.0.53
+options edns0 trust-ad
+search example.com

@@ -1,0 +1,15 @@
+# Try dnsmasq(8) first, then fallback to systemd-resolved(8).
+#
+# Use 127.0.0.1 address to handle docker contailer builds that happen in
+# docker default network (e.g. docker0). This also makes dnsmasq(8) to
+# systemd-resolved(8) link more reliable by routing through "always up"
+# loopback network device.
+#
+# See /etc/systemd/resolved.conf.d/*.conf for details on how to configure
+# systemd-resolved(8) to ignore nameserver directive from this file
+# (especially 127.0.0.1) in foreign mode.
+
+nameserver 127.0.0.1
+nameserver 127.0.0.53
+options edns0 trust-ad
+search local

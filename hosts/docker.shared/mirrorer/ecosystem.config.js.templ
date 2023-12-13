@@ -1,0 +1,12 @@
+module.exports = {
+  apps : [{
+    name: "mirrorer",
+    interpreter: "none",
+    script: "%app_dir%/mirrorer.sh",
+    cwd: "%app_dir%",
+    watch: false,
+    autorestart: false,
+    cron_restart: "%cron_minute% 23 * * *",
+    log_date_format: "YYYY-MM-DDTHH:mm:ss"
+  }]
+}

@@ -1,0 +1,6 @@
+[Match]
+MACAddress=00:22:19:5d:15:02
+Type=ether
+
+[Link]
+Name=en0

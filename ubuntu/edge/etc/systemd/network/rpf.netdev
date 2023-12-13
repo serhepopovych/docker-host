@@ -1,0 +1,4 @@
+[NetDev]
+Description=Reverse Path Filtering (RPF) blackhole interface
+Name=rpf
+Kind=dummy

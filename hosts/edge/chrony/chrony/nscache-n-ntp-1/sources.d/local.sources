@@ -1,0 +1,17 @@
+
+## Server(s) to synchronize local time
+
+# Facebook
+;time1.facebook.com
+server 129.134.28.123 prefer
+;time3.facebook.com
+server 129.134.25.123
+
+# Cloudflare
+;time.cloudflare.com
+server 162.159.200.1
+server 162.159.200.123
+
+## Peer(s) to synchronize time between
+
+#peer 203.0.113.240 key 172 xleave

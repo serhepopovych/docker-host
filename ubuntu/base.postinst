@@ -1,0 +1,354 @@
+#!/bin/bash -xe
+
+# Requires: sed(1), ln(1), install(1), find(1), usermod(8), cat(1), grep(1)
+
+# Source functions library
+. "$this_dir/distro.postinst"
+
+## Setup bootloader
+
+# Add support for ipxe on BIOS and EFI systems
+apt install grub-ipxe
+
+# Create `.' symlink in boot. This can be useful for compat configs
+f='boot'
+if t="$root$f" && [ -d "$t" ] || install -d "$t"; then
+    ln -snf . "$t/$f"
+fi
+
+# Configure GRUB2
+f='etc/default/grub.d/local.cfg'
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    # Add default configuration
+    if [ -d "${f%/*.cfg}/" ]; then
+        rm -f "$f" ||:
+    else
+        f="${f%.d/*.cfg}"
+    fi
+
+    {
+        g='### local'
+
+        # Strip previous configuration, if any
+        sed -i "${f%.d/*.cfg}" \
+            -e "/^$g$/,$ d" \
+            #
+
+        # Add header to annotate configuration block, if needed
+        if [ -n "${f%%*.cfg}" ]; then
+            echo
+            echo "$g"
+        fi
+
+        cat "$t"
+    } | {
+            # Enable XFS project quotas. Needed
+            # for Docker volume quotas support.
+            if [ -z "${host##docker*}" ]; then
+                sed \
+                    -e '/^GRUB_CMDLINE_LINUX=.*/!b' \
+                    -e "s,\s*\(['\"]\?\)\s*$, rootflags=pquota\1," \
+                    #
+            else
+                cat
+            fi
+    } >>"$f"
+
+    # Add serial terminfo configuration generator
+    f='etc/grub.d/01_serial_terminfo'
+    if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+        install -D -m 0755 "$t" "$f"
+    fi
+fi
+grub_update
+
+## Create /etc/depmod.d (see depmod.d(8) for more information)
+
+f='etc/depmod.d'
+if t="$root$f" && [ -d "$t" ] || install -d "$t"; then
+    apt install kmod
+fi
+
+## Make ssh host keys generated on first boot
+
+f="${systemd_etc_unit#/}ssh-keygen.service"
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    apt install openssh-client
+
+    if [ ! -f "$root${systemd_lib_unit#/}/ssh-keygen.service" ]; then
+        # Idea is from sshd-keygen.service from CentOS 7.x
+        install -D -m 0644 "$t" "$f"
+    fi
+
+    # Wipe ssh host keys
+    find "${root}/etc/ssh" -name 'ssh_host_*_key*' -a -delete
+
+    # Enable service
+    systemctl_enable "${f##*/}"
+fi
+
+## Enable tmpfs for /tmp
+
+f="${systemd_etc_unit#/}tmp.mount"
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    apt install systemd
+
+    g="$root${systemd_lib_unit#/}/tmp.mount"
+    [ -f "$g" ] || g="$t"
+    install -D -m 0644 "$g" "$f"
+
+    # Limit tmpfs size to 25% of total ram
+    sed -i "$f" \
+        -e 's,^\(Options\)=\(.*\)$,\1=\2\,size=25%,g' \
+        #
+
+    # Enable service
+    systemctl_enable "${f##*/}"
+fi
+
+## Make /bin/bash default login shell for new users, root and $user.
+
+if [ -x "${root}bin/bash" ]; then
+    apt install bash passwd
+
+    # Use /bin/bash as default shell for useradd(8).
+    useradd_default="${root}etc/default/useradd"
+    if [ -f "$useradd_default" ]; then
+        sed -i "$useradd_default" \
+            -e 's,^\(SHELL\)=.*$,\1=/bin/bash,g' \
+            #
+    fi
+
+    # Make it root shell
+    in_chroot "$root" "
+        if [ -d ~root ]; then
+            usermod -s '/bin/bash' root
+        fi
+    "
+fi
+
+## Set systemd-networkd(8) configuration
+
+apt install systemd-networkd ||:
+
+for f in \
+    '00-en0.link'     'en0.network'      \
+    '00-en1.link'     'en1.network'      \
+    'macvlan0.netdev' 'macvlan0.network' \
+    'rpf.netdev'      'rpf.network'      \
+    'lo0.netdev'      'lo0.network'      \
+    #
+do
+    f="etc/systemd/network/$f"
+    if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+        case "${f##*/}" in
+            '00-en1.link')
+                v='MACAddress'
+                b='--backup=numbered'
+                ;;
+            'en1.network')
+                v='DHCP IPv6AcceptRA Address Gateway DNS'
+                b='--backup=numbered'
+                ;;
+            *)
+                v=''
+                b=''
+                ;;
+        esac
+
+        install $b -D -m 0644 "$t" "$f"
+
+        if [ -n "$v" ]; then
+            if t="$f~" && [ -f "$t" ]; then
+                for v in $v; do
+                    sed -n -e "s,^\($v=.*\),\1,p" "$t" | \
+                    sed -i -e "/^#\?$v=/!b" -e 'r /dev/stdin' -e 'd' "$f"
+                done
+            fi
+        fi
+    fi
+done
+unset v b
+
+systemctl_enable 'systemd-networkd'
+
+# Purge other network managers and their config
+apt purge --autoremove \
+    netplan.io network-manager ifupdown \
+    #
+rm -rf "$root/etc/netplan" ||:
+
+# Add Reverse Path Filtering (RPF) iproute2 config
+f='etc/iproute2/rt_tables.d/local.conf'
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    apt install iproute2
+    install -D -m 0644 "$t" "$f"
+fi
+
+## Set login shell session auto-logout after timeout
+
+f='etc/profile.d/shell-timeout.sh'
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    install -D -m 0644 "$t" "$f"
+fi
+
+## Set nfs-common (client) configuration
+
+apt install nfs-common ||:
+
+f='etc/default/nfs-common'
+if f="$root$f" && [ -f "$f" ]; then
+    # enable rpc.gssd(8) for NFS client with Kerberos
+    sed -i "$f" \
+        -e 's,^#\?\(NEED_GSSD\)=.*$,\1=yes,' \
+        #
+
+    # mask rpc.svcgssd(8) as unneeded for NFS client
+    t="${root}${systemd_etc_unit#/}"
+    ln -sf '/dev/null' "${t}/rpc-svcgssd.service"
+fi
+
+## Add firewall configuration files
+
+# nftables
+f='etc/nftables.conf'
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    apt install nftables
+    install --backup=numbered -D -m 0700 "$t" "$f"
+
+    f='etc/systemd/system/nftables.service.d/override.conf'
+    if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+        install -D -m 0644 "$t" "$f"
+        # Note that "systemctl daemon-reload" needed here
+    fi
+
+    # nftables.set.*
+    f='usr/local/etc/nftables.d/'
+    if t="$host_dir$f" && [ -d "$t" ] && f="$root$f"; then
+        for t in \
+            "$t"set.* \
+            #
+        do
+            if [ -f "$t" ]; then
+                install -D -m 0600 "$t" "$f/${t##*/}"
+            fi
+        done
+    fi
+
+    # wl-ips
+    f='usr/local/sbin/wl-ips'
+    if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+        install -D -m 0755 "$t" "$f"
+    fi
+fi
+
+## Add docker(1) configuration
+
+f='etc/docker/daemon.json'
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    apt install docker.io
+    install -D -m 0644 "$t" "$f"
+
+    f='root/bin'
+    if t="$host_dir$f"  && [ -d "$t" ] && f="$root$f"; then
+        for t in \
+            "$t/nft-community" \
+            "$t/nft-isolated" \
+            "$t/macvlan1" \
+            #
+        do
+            # First, test(1) for mandatory file
+            [ -f "$t.sh" ] || continue
+
+            # Next, install it and supplementary files
+            for t in \
+                "$t.params" \
+                "$t.sh" \
+                "$t.exec" \
+                #
+            do
+                if [ -f "$t" ]; then
+                    if [ -x "$t" ]; then
+                        install -D -m 0755 "$t" "$f/${t##*/}"
+                    else
+                        install -D -m 0644 "$t" "$f/${t##*/}"
+                    fi
+                fi
+            done
+
+            # Last, execute if executable
+            if t="$f/${t##*/}" && [ -x "$t" ]; then
+                # $t.exec
+                "$t"
+            fi
+       done
+    fi
+fi
+
+## Add pinger helper to run in container utils seamlessly from host
+
+f='usr/local/sbin/pinger'
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    install -D -m 0755 "$t" "$f"
+fi
+
+## Add systemd-resolved(8) and dnsmasq(8) configuration
+
+f='etc/hosts'
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    if [ -f "$f" ]; then
+        # remove existing configuration, if any
+        sed -i "$f" \
+            -e '/^##\? local$/,$ d' \
+            #
+
+        # remove empty lines at end of file
+        sed -i "$f" \
+            -e ':w /^\n*$/ { $ d; N; b w; }' \
+            #
+    fi
+
+    sed >>"$f" \
+        -e "s,@hostname@,${host%%.*},g" "$t" \
+        #
+fi
+
+f='usr/local/etc/resolv.conf.local'
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    install -D -m 0644 "$t" "$f"
+    t="${f##*/}"
+    t="${t%.local}"
+    ln -sfr "$f" "${root}etc/${t}"
+fi
+
+f='etc/systemd/resolved.conf.d/local.conf'
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    apt install systemd-resolved ||:
+    install -D -m 0644 "$t" "$f"
+fi
+
+## Add sshd_config(5) config snippet
+
+f='etc/ssh/sshd_config.d/local.conf'
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    apt install openssh-server
+    install -D -m 0644 "$t" "$f"
+fi
+
+## Add sysctl.conf(5) file
+
+f='etc/sysctl.d/local.conf'
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    apt install procps
+    install -D -m 0644 "$t" "$f"
+fi
+
+## Add udev rules to apply conntrack sysctl entries
+
+f='etc/udev/rules.d/local.rules'
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    install -D -m 0644 "$t" "$f"
+fi
+
+## Exit successfuly
+exit 0

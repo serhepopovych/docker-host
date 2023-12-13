@@ -1,0 +1,81 @@
+# Ignore host and forward all traffic without processing it. In
+# transparent mode, it is recommended to use an IP address (range), not
+# the hostname. In regular mode, only SSL traffic is ignored and the
+# hostname should be used. The supplied value is interpreted as a
+# regular expression and matched on the ip or the hostname. Type
+# sequence of str.
+ignore_hosts: [ '^acme-le\.gw\.api\.example\.com$',
+                '^r3\.o\.lencr\.org$',
+                '^([^.]+\.)*(microsoft|windowsupdate|ubuntu)\.com$',
+                '^([^.]+\.)*(debian|deb\.nodesource)\.org$',
+                '^raw\.githubusercontent\.com$',
+                '^(registry-1\.|auth\.)?docker\.io$',
+                '^production\.cloudflare\.docker\.com$',
+                '^registry\.npmjs\.org$' ]
+
+# Opposite of --ignore-hosts. Type sequence of str.
+allow_hosts: []
+
+# Block connections from public IP addresses. Type bool.
+block_global: false
+
+# Block connections from local (private) IP addresses. This option does
+# not affect loopback addresses (connections from the local machine),
+# which are always permitted. Type bool.
+block_private: false
+
+# Address to bind proxy server(s) to (may be overridden for individual
+# modes, see `mode`). Type str.
+listen_host: '@listen_host@'
+
+# Port to bind proxy server(s) to (may be overridden for individual
+# modes, see `mode`). By default, the port is mode-specific. The default
+# regular HTTP proxy spawns on port 8080. Type optional int.
+listen_port: @listen_port@
+
+# The proxy server type(s) to spawn. Can be passed multiple times.
+# Mitmproxy supports "regular" (HTTP), "transparent", "socks5",
+# "reverse:SPEC", and "upstream:SPEC" proxy servers. For reverse and
+# upstream proxy modes, SPEC is host specification in the form of
+# "http[s]://host[:port]".  You may append `@listen_port` or
+# `@listen_host:listen_port` to override `listen_host` or `listen_port`
+# for a specific proxy mode. Features such as client playback will use
+# the first mode to determine which upstream server to use. Type
+# sequence of str.
+mode: [ 'transparent' ]
+
+# Use the Host header to construct URLs for display. Type bool.
+showhost: true
+
+# Toggle the mitmproxy onboarding app. Type bool.
+onboarding: true
+
+# Onboarding app domain. For transparent mode, use an IP when a DNS
+# entry for the app domain is not present. Type str.
+onboarding_host: @oba_hostname@
+
+# Port to serve the onboarding app from. Type int.
+onboarding_port: 80
+
+# Enable/disable raw TCP connections. TCP connections are enabled by
+# default. Type bool.
+rawtcp: false
+
+# Enable/disable raw UDP connections. UDP connections are enabled by
+# default. Type bool.
+rawudp: false
+
+# Stream data to the client if response body exceeds the given
+# threshold. If streamed, the body will not be stored in any way.
+# Understands k/m/g suffixes, i.e. 3m for 3 megabytes. Type optional
+# str.
+stream_large_bodies: 1m
+
+# Web UI host. Type str.
+web_host: @web_host@
+
+# Web UI port. Type int.
+web_port: @web_port@
+
+# Start a browser. Type bool.
+web_open_browser: false

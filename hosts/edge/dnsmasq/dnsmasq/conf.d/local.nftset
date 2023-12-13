@@ -1,0 +1,53 @@
+
+### TTL and cache settings ###
+
+# Set a maximum TTL value that will be handed out to clients. The specified
+# maximum TTL will be given to clients instead of the true TTL value if it
+# is lower. Set to lower value than nftables set timeout, which is 3600s now.
+max-ttl=3540
+
+# Set a maximum TTL value for entries in the cache. Never set higher than
+# nftables set timeout, which is 3600s now, since set record will timeout while
+# client will receive answer from cache bypassing --nftset option. Set to
+# same or lower value than --max-ttl to make sure resolved IPs added to set(s).
+max-cache-ttl=3540
+
+# Set the size of dnsmasq's cache.
+cache-size=1024
+
+### nftables sets ###
+
+nftset=/mitm.it/4#inet#nat#mitmproxy_ips,4#inet#nat#mitm_ips
+
+# letsencrypt.org
+nftset=/r3.o.lencr.org/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_nginx_ips
+
+# example
+nftset=/acme-le.gw.api.example.com/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_nginx_ips
+
+# windows
+nftset=/microsoft.com/4#inet#nat#mitmproxy_ips
+nftset=/windowsupdate.com/4#inet#nat#mitmproxy_ips
+
+# linux
+nftset=/ubuntu.com/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_edge_ips,4#inet#nat#direct_docker_ips
+nftset=/canonical.com/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_edge_ips,4#inet#nat#direct_docker_ips
+nftset=/debian.org/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_docker_ips
+
+# docker
+nftset=/docker.io/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_edge_ips,4#inet#nat#direct_docker_ips
+nftset=/docker.com/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_edge_ips,4#inet#nat#direct_docker_ips
+
+# github
+nftset=/github.com/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_edge_ips,4#inet#nat#direct_docker_ips
+nftset=/github.io/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_edge_ips,4#inet#nat#direct_docker_ips
+nftset=/raw.githubusercontent.com/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_edge_ips,4#inet#nat#direct_docker_ips
+
+# python
+nftset=/pypi.python.org/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_edge_ips
+
+# nodejs
+nftset=/deb.nodesource.com/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_docker_ips
+nftset=/nodejs.org/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_docker_ips
+nftset=/registry.npmjs.org/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_docker_ips
+#nftset=/dl.yarnpkg.com/4#inet#nat#mitmproxy_ips,4#inet#nat#direct_docker_ips

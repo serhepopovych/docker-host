@@ -1,0 +1,4 @@
+[submodule "certbotsh"]
+	path = hosts/docker/nginx/certbotsh/app
+	url = https://github.com/serhepopovych/certbotsh.git
+	branch = master

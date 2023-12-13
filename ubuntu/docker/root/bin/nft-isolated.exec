@@ -1,0 +1,75 @@
+#!/bin/sh
+
+################################################################################
+
+if [ ! -e "$0" -o "$0" -ef "/proc/$$/exe" ]; then
+    # Executed script is
+    #  a) read from stdin through pipe
+    #  b) specified via -c option
+    #  d) sourced
+    this='/bin/false'
+    alias exec=''
+
+    # Usage: _exit [<rc>]
+    _exit()
+    {
+        # This is only necessary for sourced (d)
+        # case to  avoid environment pollution
+        local rc=${1:-$?}
+
+        unalias exec exit
+
+        unset this this_dir
+        unset -f _exit
+
+        return $rc
+    }
+    alias exit='_exit'
+else
+    # Set option(s)
+    set -e
+    set -u
+
+    ## Enable debug/trace
+    #exec 2>"/tmp/${0##*/}.debug.$(date '+%s.%N')"
+    #set >&2
+    #set -x
+
+    # Executed script exists and it's inode differs
+    # from process exe symlink (Linux specific)
+    this="$0"
+fi
+this_dir="$(cd "${this%/*}" && echo "$PWD")/"
+
+################################################################################
+
+if [ -z "${this##*.exec}" ]; then
+    this="${this%.exec}.params"
+    if [ -f "$this" ]; then
+        # Only one parameter expected on line and thus
+        # parameters separated by newline. To specify
+        # empty parameter use empty line
+        _IFS="$IFS"
+        IFS='
+'
+        set -- $(
+            # Not using cat(1) to avoid external dependency
+            while read -r buf; do
+                # Note that escape sequences starting with '\'
+                # can be handled by some (e.g. dash(1)) shell
+                # interpreters.
+                #
+                # Not using printf(1) as it might be external
+                # command to avoid external dependency
+                echo "$buf"
+            done <"$this"
+        )
+        IFS="${_IFS}"
+        unset _IFS
+    fi
+    this="${this%.params}.sh"
+fi
+
+exec "$this" "$@"
+
+exit

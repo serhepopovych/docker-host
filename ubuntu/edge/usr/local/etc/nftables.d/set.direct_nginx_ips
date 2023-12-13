@@ -1,0 +1,4 @@
+	set direct_nginx_ips {
+		type ipv4_addr
+		size 1024
+	}

@@ -1,0 +1,10 @@
+.git
+.gitmodules
+.gitignore
+ci
+node_modules
+npm-debug.log
+combined.log
+error.log
+.dockerignore
+Dockerfile

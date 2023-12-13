@@ -1,0 +1,91 @@
+$TTL 3H
+@	IN SOA	@ infrastructure.example.com. (
+					0	; serial
+					1D	; refresh
+					1H	; retry
+					1W	; expire
+					3H )	; minimum
+	NS	@
+	A	127.0.0.1
+	AAAA	::1
+
+;;;QNAME
+
+;windows
+time.windows.com	CNAME	time.example.com.
+time.nist.gov		CNAME	time.example.com.
+time-a.nist.gov		CNAME	time.example.com.
+time-b.nist.gov		CNAME	time.example.com.
+time-nw.nist.gov	CNAME	time.example.com.
+
+;linux
+pool.ntp.org		CNAME	time.example.com.
+*.pool.ntp.org		CNAME	time.example.com.
+ntp.ubuntu.com		CNAME	time.example.com.
+
+; ubuntu
+archive.ubuntu.com	CNAME	ubuntu.ip-connect.info.
+*.archive.ubuntu.com	CNAME	ubuntu.ip-connect.info.
+security.ubuntu.com	CNAME	ubuntu.ip-connect.info.
+
+;; fedoraproject (epel)
+;mirrors.fedoraproject.org	CNAME	httpproxy.example.com.
+;; rockylinux
+;mirrors.rockylinux.org		CNAME	httpproxy.example.com.
+;; centos
+;mirrors.centos.org		CNAME	httpproxy.example.com.
+;mirrorlist.centos.org		CNAME	httpproxy.example.com.
+
+;;centos-vault
+;vault.centos.org		CNAME	centos-vault.example.com.
+
+;;mitm.it
+;mitm.it			CNAME	mitm-it.example.com.
+
+;; typo domains, can implement wildcard matching (i.e. dh.example.com)
+;; that could have security implications (e.g. MitM to steal credentials)
+
+;*.example.com		CNAME	rpz-passthru.
+*.xample.com		CNAME	.
+*.eample.com		CNAME	.
+*.exampl.com		CNAME	.
+
+;; block other gTLDs where no domain names registered
+
+*.example.us		CNAME	.
+*.example.org		CNAME	.
+*.example.net		CNAME	.
+*.example.edu		CNAME	.
+*.example.gov		CNAME	.
+*.example.mil		CNAME	.
+
+*.example.info		CNAME	.
+*.example.biz		CNAME	.
+
+;; block ccTLDs that are in US sanctions list
+
+*.cu	CNAME	.
+*.ni	CNAME	.
+*.ve	CNAME	.
+
+*.su	CNAME	.
+*.ru	CNAME	.
+*.by	CNAME	.
+
+*.af	CNAME	.
+*.iq	CNAME	.
+*.ir	CNAME	.
+*.sy	CNAME	.
+*.ps	CNAME	.
+*.ye	CNAME	.
+*.lb	CNAME	.
+
+*.et	CNAME	.
+*.ml	CNAME	.
+*.sd	CNAME	.
+*.ss	CNAME	.
+*.so	CNAME	.
+*.zw	CNAME	.
+
+*.kp	CNAME	.
+*.cn	CNAME	.

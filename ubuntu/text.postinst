@@ -1,0 +1,113 @@
+#!/bin/bash -xe
+
+# Require: ln(1), install(1), chown(1), id(1)
+
+# Source functions library
+. "$this_dir/distro.postinst"
+
+# Usage: config_user_apps
+config_user_apps()
+{
+    # Usage: mc_ini <unpack_dir>
+    mc_ini()
+    {
+        local func="${FUNCNAME:-mc_ini}"
+
+        local unpack_dir="${1:?missing 1st arg to ${func}() <unpack_dir>}"
+
+        local t f='.config/mc/ini'
+        if t="$host_dir/etc/skel/$f" && [ -f "$t" ]; then
+            apt install mc
+            install -D -m 0644 "$t" "$unpack_dir/$f"
+        fi
+    }
+
+    # Usage: screenrc <unpack_dir>
+    screenrc()
+    {
+        local func="${FUNCNAME:-screenrc}"
+
+        local unpack_dir="${1:?missing 1st arg to ${func}() <unpack_dir>}"
+
+        local t f='.screenrc'
+        if t="$host_dir/etc/skel/$f" && [ -f "$t" ]; then
+            apt install screen
+            install -D -m 0644 "$t" "$unpack_dir/$f"
+        fi
+    }
+
+    # Usage: config_skel <dir>
+    config_skel()
+    {
+        local func="${FUNCNAME:-config_skel}"
+
+        local d="${1:?missing 1st arg to ${func}() <dir>}"
+
+        install -d \
+            "$d/.local" "$d/.local/share" "$d/.local/bin" \
+            "$d/.cache" "$d/.config" \
+            #
+        install -d -m 0700 \
+            "$d/.ssh" \
+            "$d/tmp" \
+            #
+        ln -snf '.local/bin' "$d/bin"
+
+        mc_ini "$d"
+        screenrc "$d"
+        ssh_agent_start4bashrc "$d"
+    }
+
+    local uid gid
+    uid="$(id -u 2>/dev/null)"
+    gid="$(id -g 2>/dev/null)"
+
+    local t='' u
+
+    # user home directory skeleton
+    for u in \
+        '/etc/skel' \
+        'root' \
+        "${SUDO_USER:-admin}" \
+        #
+    do
+        eval $(
+            in_chroot_exec "$root" "
+                if [ -n '${u##*/*}' ]; then
+                    # Find user's home directory if user exists
+                    t=~$u && [ -z \"\${t##*/*}\" ] || t=''
+                else
+                    t='$u'
+                fi
+                [ -d \"\$t\" ] || t=''
+                # / is not allowed as skel: returns t=''
+                echo \"t='\${t#/}'\"
+            "
+        )
+        if [ -n "$t" ]; then
+            config_skel "$root$t"
+
+            in_chroot "$root" "
+                if [ -n '${u##*/*}' ] &&
+                   u=\"\$(id -u '$u' 2>/dev/null)\" &&
+                   g=\"\$(id -g '$u' 2>/dev/null)\" &&
+                   [ \$u -ne $uid -o \$g -ne $gid ]
+                then
+                    # Adjust filesystem entries owner and group
+                    exec chown \
+                        --from='$uid:$gid' \
+                        --recursive \
+                        \"\$u:\$g\" \
+                        '/$t' \
+                        #
+                fi
+            "
+        fi
+    done
+
+    unset -f mc_ini screenrc config_skel
+}
+config_user_apps
+
+## Exit successfuly
+exit 0

@@ -1,0 +1,20 @@
+//
+// Do any local configuration here
+//
+
+zone "rpz.example.com" {
+	type master;
+	file "/etc/bind/db.rpz";
+};
+
+zone "_acme-le.example.com" {
+	type forward;
+	forward only;
+	forwarders {
+		203.0.113.22; // _acme-le.example.com
+	};
+};
+
+// Consider adding the 1918 zones here, if they are not used in your
+// organization
+//include "/etc/bind/zones.rfc1918";

@@ -1,0 +1,14 @@
+[Match]
+Name=en0
+
+[Link]
+ARP=yes
+
+[Network]
+LinkLocalAddressing=no
+DHCP=yes
+IPv6AcceptRA=no
+IPv4ProxyARP=yes
+LLMNR=no
+LLDP=no
+EmitLLDP=no

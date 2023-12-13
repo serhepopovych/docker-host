@@ -1,0 +1,24 @@
+#!/bin/sh
+
+set -e
+
+serial="$(
+    grep -r -s '^GRUB_SERIAL_COMMAND=' /etc/default/grub.d | \
+    sed -n -e 's,^.\+=.*--unit=\([0-9]*\).*,\1,p'
+)"
+
+if [ -n "$serial" ]; then
+    if [ -d /sys/firmware/efi ]; then
+        cat <<EOF
+terminfo serial_efi$serial vt100-color -u
+terminfo serial_com$serial vt100-color -u
+EOF
+    else
+        cat <<EOF
+terminfo serial      vt100-color -u
+terminfo serial_com$serial vt100-color -u
+EOF
+    fi
+fi
+
+echo 'loadfont ${prefix}/unicode.pf2'
