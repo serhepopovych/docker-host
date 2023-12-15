@@ -10,3 +10,6 @@ container_3='bind9'
 
 # req: none
 container_4='pinger'
+
+# req: none
+container_5='lighttpd'
