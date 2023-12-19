@@ -179,10 +179,17 @@ apt purge --autoremove \
 rm -rf "$root/etc/netplan" ||:
 
 # Add Reverse Path Filtering (RPF) iproute2 config
-f='etc/iproute2/rt_tables.d/local.conf'
-if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+f='etc/iproute2/rt_tables.d/'
+if t="$host_dir$f" && [ -d "$t" ] && f="$root$f"; then
     apt install iproute2
-    install -D -m 0644 "$t" "$f"
+    for t in \
+        "$t"*.conf \
+        #
+    do
+        if [ -f "$t" ]; then
+            install -D -m 0644 "$t" "$f/${t##*/}"
+        fi
+    done
 fi
 
 ## Set login shell session auto-logout after timeout
