@@ -68,7 +68,7 @@ config_user_apps()
     for u in \
         '/etc/skel' \
         'root' \
-        "${SUDO_USER:-admin}" \
+        "$user" \
         #
     do
         eval $(
