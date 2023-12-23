@@ -5,6 +5,7 @@
 zone "rpz.example.com" {
 	type master;
 	file "/etc/bind/db.rpz";
+	allow-query { localhost; };
 };
 
 zone "_acme-le.example.com" {
