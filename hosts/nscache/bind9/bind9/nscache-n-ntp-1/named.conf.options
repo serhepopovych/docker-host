@@ -81,12 +81,3 @@ options {
 	// Hide BIND version
 	version "unknown";
 };
-
-// Do not query authoritative DNS servers using IPv6 (see also query-source-v6)
-server ::/0 {
-	bogus yes;
-};
-
-#server 0.0.0.0/0 {
-#	edns no;
-#};
