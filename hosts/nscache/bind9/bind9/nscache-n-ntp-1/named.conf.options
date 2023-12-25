@@ -72,7 +72,7 @@ options {
 	// BIND Response Policy Zone
 	response-policy {
 		zone "rpz.example.com";
-	} break-dnssec yes;
+	} break-dnssec yes min-ns-dots 0;
 
 	// max-ncache-ttl sets the maximum time (in seconds) for which the server
 	// will cache negative (NXDOMAIN) answers.
