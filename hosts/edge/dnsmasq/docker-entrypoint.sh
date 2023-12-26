@@ -87,12 +87,44 @@ if [ -n "${PID+x}" ]; then
         wait
     done
 else
-    pid='/run/@name@/@named@.pid'
+    readonly \
+        user='@user@' \
+        name='@name@' \
+        pid='/run/@name@/@named@.pid' \
+        proxy_stdio='@proxy_stdio@' \
+        #
 
     # remove stale pid file, if any
     rm -f "$pid" ||:
 
-    /etc/init.d/@name@ start || exit
+    # proxy stdandard output and error using named pipe to allow
+    # daemon to write to them after switching user (e.g. using gosu)
+    if [ -n "${proxy_stdio#\@proxy_stdio\@}" ]; then
+        readonly \
+            stdout='/dev/stdout' \
+            stderr='/dev/stderr' \
+            #
 
-    PID="$pid" exec gosu '@user@' "$0"
+        # remove original symlinks
+        rm -f "$stdout" "$stderr"
+
+        # create named pipes group owned by user
+        mkfifo -m 0660 "$stdout" "$stderr"
+        chown ":$user" "$stdout" "$stderr"
+
+        # spawn cat(1) as input/output proxy
+        cat "$stdout" &
+        cat "$stderr" >&2 &
+
+        # this serves two purposes:
+        #  1) reopens file descriptors to point to named pipes making them
+        #     available to child processes and via /proc/*/fd/*
+        #  2) opens writers to avoid sending EOF after last writer exits
+        #     (e.g. single echo >/dev/stdout will cause cat(1) exit)
+        exec >"$stdout" 2>"$stderr"
+    fi
+
+    /etc/init.d/$name start || exit
+
+    PID="$pid" exec gosu "$user" "$0"
 fi
