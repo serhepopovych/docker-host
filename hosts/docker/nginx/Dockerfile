@@ -84,21 +84,13 @@ ARG dns_ip=8.8.8.8
 COPY nginx/conf.d/*.conf /etc/nginx/conf.d/
 COPY nginx/inc.d/*.inc /etc/nginx/inc.d/
 COPY nginx/root/* $data_dir/root/
+COPY nginx/app/nginx.sh /usr/sbin/
 
-# It is impossible to open() file descriptor using /dev/std* (/proc/self/fd/*)
-# when it is of type socket:
-# https://stackoverflow.com/questions/22541333/have-nginx-access-log-and-error-log-log-to-stdout-and-stderr-of-master-process
-#
-# pm2 passes UNIX domain unnamed sockets as stdin, stdout and stderr
-# of managed processes (see ls -l /proc/<pm2_pid>/fd).
-#
-# nginx has "stderr" option for error_log to keep inherited from pm2 file
-# descriptor, but lacks such option for access_log. As dirty workaround point
-# access_log to /root/.pm2/logs/nginx-out.log that works with pm2-logrotate too.
-
-RUN sed -e 's,^\(error_log\s\+\)\(\S\+\)\(\s\+\S\+\)$,\1stderr\3,' \
-        -e 's,^\(\s*access_log\s\+\)\(\S\+\)\(\s\+\S\+\)$,\1/root/.pm2/logs/nginx-out.log\3,' \
-        -i /etc/nginx/nginx.conf \
+RUN ln -sf '/dev/stderr.nginx' '/var/log/nginx/error.log' \
+ && ln -sf '/dev/stdout.nginx' '/var/log/nginx/access.log' \
+ && sed -e "s,@user@,nginx,g" \
+        -e "s,@proxy_stdio@,1,g" \
+        -i /usr/sbin/nginx.sh \
  && for t in 'conf' 'inc'; do \
         find "/etc/nginx/$t.d/" -name "*.$t" -type f -a -execdir \
             sed -e "s,@ngx_hostname@,$ngx_hostname,g" \
