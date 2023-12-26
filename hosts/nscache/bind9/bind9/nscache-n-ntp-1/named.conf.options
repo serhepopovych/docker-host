@@ -81,3 +81,7 @@ options {
 	// Hide BIND version
 	version "unknown";
 };
+
+statistics-channels {
+	inet 127.0.0.1 port 8653 allow { 127.0.0.1; };
+};
