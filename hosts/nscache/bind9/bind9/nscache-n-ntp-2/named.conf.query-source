@@ -1,0 +1,6 @@
+
+#view caching {
+	// Query other NSes from specific IPs only
+	query-source 203.0.113.251;
+	query-source-v6 ::1;
+#};

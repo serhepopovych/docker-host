@@ -39,6 +39,7 @@ COPY bind9/ /tmp/bind9/
 RUN install -m 0644 -g bind -t /etc/bind/ \
      /tmp/bind9/$host/named.conf.options \
      /tmp/bind9/$host/named.conf.local \
+     /tmp/bind9/$host/named.conf.query-source \
      /tmp/bind9/$host/db.rpz \
  && rm -rf /tmp/bind9/ \
  && sed -e 's,^#\?\(RESOLVCONF\)=.*$,\1=no,' \

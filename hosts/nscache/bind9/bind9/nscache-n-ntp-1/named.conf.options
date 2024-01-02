@@ -36,9 +36,8 @@ options {
 		::1;             // localhost
 	};
 
-	// Query other NSes from specific IPs only
-	query-source 203.0.113.250;
-	query-source-v6 ::1;
+	// query-source and query-source-v6 options
+	include "/etc/bind/named.conf.query-source";
 
 	//========================================================================
 	// If BIND logs error messages about the root key being expired,
