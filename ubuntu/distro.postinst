@@ -265,7 +265,7 @@ _in_chroot()
     local cmd="${2:?missing 2d arg to ${func}() <cmd>}"
     shift 2
 
-    local helpers_dir="/${helpers_dir#$root}"
+    local helpers_dir="${helpers_dir:+/${helpers_dir#$root}}"
     local _env_exec="${_in_chroot_exec-}"
 
     eval "

@@ -1,0 +1,164 @@
+#!/bin/sh -ue
+
+# Catch only dockerd(8) in-container rule setups,
+# leaving dockerd(8) in-host rule setups intact.
+if [ "/proc/1/ns/net" -ef "/proc/$$/ns/net" ]; then
+    # See `update-alternatives --display iptables` for priorities
+    for iptables in \
+        '/usr/sbin/iptables-nft' \
+        '/usr/sbin/iptables-legacy' \
+        '/bin/false' \
+        #
+    do
+        if [ -x "$iptables" ]; then
+            exec "$iptables" "$@"
+        fi
+    done
+else
+    # Requires: nft(8), cat(1)
+
+    ## Enable debug/trace
+    #exec 2>"/tmp/${0##*/}.debug.$(date '+%s.%N')"
+    #set >&2
+    #set -x
+
+    # Usage: nft ...
+    nft()
+    {
+        if [ -n "${__iptables_debug__+x}" ]; then
+            cat
+        else
+            command nft "$@"
+        fi
+    }
+
+    # Usage: fatal <fmt> ...
+    fatal()
+    {
+        local rc=$?
+        local fmt="${1:?missing 1st arg to fatal() <fmt>}"
+        shift
+
+        {
+            printf -- '%s: ' "$0"
+            printf -- "$fmt" "$@"
+        } >&2
+
+        exit $rc
+    }
+
+    # Catch only two rules that match pattern below and only differ in ?<proto>
+    # to gather all necessary information to configure redirect:
+    #
+    # iptables -t nat -I DOCKER_OUTPUT -d ?<resolverIP> \
+    #          -p ?<proto> --dport ?<dnsPort> -j DNAT --to-destination ?<laddr>
+    #
+    # See https://github.com/moby/libnetwork/blob/master/resolver_unix.go for rules
+    # added by dockerd(8).
+
+    # libc resolver IP
+    resolverIP=''
+    # transport protocol (either tcp or udp)
+    proto=''
+    # default DNS port used by libc resolver (53)
+    dnsPort=''
+    # <ip>:<port> of UDP/TCP socket
+    laddr=''
+
+    # Note that dockerd(8) also adds --wait option to wait for xtables
+    # lock. See iptables(8) for more information on this option.
+    next='--wait'
+    while [ $# -gt 0 ]; do
+        if [ -n "${1##$next}" ]; then
+            if [ -n "$next" ]; then
+                # Not our rule: skip it
+                exit 0
+            else
+                # '--to-destination' last expected argument
+                fatal 'no args expected, got "%s"\n' "$1"
+            fi
+        fi
+
+        case "$1" in
+            '--wait')
+                next='-t'
+                ;;
+            '-t')
+                next='nat'
+                ;;
+            'nat')
+                next='-I'
+                ;;
+            '-I')
+                next='DOCKER_OUTPUT'
+                ;;
+            'DOCKER_OUTPUT')
+                next='-d'
+                ;;
+            '-d')
+                resolverIP="${2-}" && [ -n "$resolverIP" ] ||
+                    fatal 'expected $resolverIP\n'
+                shift
+                next='-p'
+                ;;
+            '-p')
+                proto="${2-}" && [ -n "$proto" ] ||
+                    fatal 'expected $proto\n'
+                shift
+                next='--dport'
+                ;;
+            '--dport')
+                dnsPort="${2-}" && [ -n "$dnsPort" ] ||
+                    fatal 'expected $dnsPort'
+                shift
+                next='-j'
+                ;;
+            '-j')
+                next='DNAT'
+                ;;
+            'DNAT')
+                next='--to-destination'
+                ;;
+            '--to-destination')
+                case "$proto" in
+                    'udp'|'tcp')
+                        laddr="${2-}" && [ -n "$laddr" ] ||
+                            fatal 'expected $laddr\n'
+                        shift
+                        next=''
+                        ;;
+                    *)
+                        ! : || fatal '$proto should be udp or tcp, got "%s"\n' \
+                                   "$proto" \
+                                   #
+                        ;;
+                esac
+                ;;
+        esac
+        shift
+    done
+    [ -z "$next" ] || exit 0
+
+    # empty if same
+    laddr_same="${laddr##$resolverIP:*}"
+
+    nft -f - <<EOF
+    table ip raw {
+        comment "divert libc resolver to dockerd(8) embedded DNS server"
+
+        chain DOCKER_OUTPUT {
+            type filter hook output priority raw;
+
+            # Stateless DNAT
+            ip daddr $resolverIP \
+                $proto dport $dnsPort${laddr_same:+ ip daddr set ${laddr%%:*}} \
+            $proto dport set ${laddr##*:} accept
+
+            # Stateless SNAT
+            ip saddr ${laddr%%:*} \
+                $proto sport ${laddr##*:}${laddr_same:+ ip saddr set $resolverIP} \
+            $proto sport set $dnsPort accept
+        }
+    }
+EOF
+fi # [ "/proc/1/ns/net" -ef "/proc/$$/ns/net" ]

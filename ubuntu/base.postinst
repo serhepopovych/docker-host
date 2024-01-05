@@ -292,6 +292,19 @@ if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
     fi
 fi
 
+## Add iptables(8) wrapper to use with dockerd(8) for stateless redirect/NAT
+
+f='usr/local/sbin/iptables-dockerd'
+if t="$host_dir$f" && [ -f "$t" ] && f="$root$f"; then
+    apt install nftables
+    install -D -m 0755 "$t" "$f"
+
+    in_chroot "$root" "
+        update-alternatives \
+            --install '/usr/sbin/iptables' 'iptables' '/${f#$root}' 100
+    "
+fi
+
 ## Add pinger helper to run in container utils seamlessly from host
 
 f='usr/local/sbin/pinger'
