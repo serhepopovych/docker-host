@@ -54,7 +54,7 @@ fatal()
     exit $rc
 }
 
-# Usage: network_create_bridge <name> <subnet> [<mtu>]
+# Usage: network_create_bridge <name> <subnet> [<subnet6>] [<mtu>]
 network_create_bridge()
 {
     local func="${FUNCNAME:-network_create_bridge}"
@@ -69,7 +69,18 @@ network_create_bridge()
     [ -n "${gateway##*[!0-9]*}" ] || return 3
     gateway="${subnet%.*/*}.$((gateway + 1))"
 
-    local mtu="${3:-65534}"
+    local subnet6="${3-}"
+    if [ -n "$subnet6" ]; then
+        [ -n "${subnet6##*[!0-9a-fA-F:/]*}" -a \
+          -z "${subnet6##*:*[0-9a-fA-F]/[0-9]*}" ] || return 4
+
+        local gateway6="${subnet6%/*}" && gateway6="${gateway6##*:}"
+        [ -n "$gateway6" ] || gateway6='0'
+        [ -n "${gateway6##*[!0-9a-fA-F]*}" ] || return 5
+        gateway6="${subnet6%:*/*}:$((gateway6 + 1))"
+    fi
+
+    local mtu="${4:-65534}"
     [ "${mtu}" -ge '1500' -a "${mtu}" -le '65534' ] 2>/dev/null ||
         mtu='65534'
 
@@ -80,7 +91,8 @@ network_create_bridge()
     # nft-isol-`pid mod 131072'
 
     docker network create --driver='bridge' \
-        --subnet="$subnet" \
+        --subnet="$subnet" --gateway="$gateway" \
+        ${subnet6:+--ipv6 --subnet="$subnet6" --gateway="$gateway6"} \
         -o 'com.docker.network.bridge.enable_icc=true' \
         -o 'com.docker.network.bridge.enable_ip_masquerade=false' \
         -o "com.docker.network.bridge.host_binding_ipv4=$gateway" \
@@ -119,7 +131,9 @@ Usage: $prog_name {add|del} [options]
 
 Options and their defaults:
     --net=$net
-        Network prefix in CIDR notation to configure.
+        IPv4 network prefix in CIDR notation to configure.
+    --net6=${net6:-<none>}
+        IPv6 network prefix in CIDR notation to configure.
     --mtu=${mtu:-<max_supported>}
         Maximum Transmit Unit (MTU) to configure.
 
@@ -153,9 +167,11 @@ iface="${prog_name%.sh}"
 case "$iface" in
     "$v_community")
         net='192.0.2.128/26'
+        net6=''
         ;;
     "$v_isolated")
         net='192.0.2.192/26'
+        net6=''
         ;;
     *)
         fatal 'Must be called (i.e. argv0) as "%s", or "%s" not as "%s"\n' \
@@ -179,10 +195,10 @@ esac
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --net=*|--mtu=*)
+        --net=*|--net6=*|--mtu=*)
             arg "$1" 'non-empty-value'
             ;;
-        --net|--mtu)
+        --net|--net6|--mtu)
             arg "$1=${2-}" 'non-empty-value'
             ${2+shift}
             ;;
@@ -203,7 +219,7 @@ done
 iface="$iface$suffix"
 case "$cmd" in
     'add')
-        network_create_bridge "$iface" "$net" "$mtu"
+        network_create_bridge "$iface" "$net" "$net6" "$mtu"
         ;;
     'del')
         network_rm "$iface"
