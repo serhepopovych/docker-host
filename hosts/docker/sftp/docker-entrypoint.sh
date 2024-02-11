@@ -3,7 +3,7 @@
 # Requires: nc.openbsd(1), gawk(1), chroot(1), sleep(1), mkfifo(1), cat(1)
 #           chown(1), rm(1)
 
-# Usage: assert_m
+# Usage: assert_m [<func>]
 assert_m()
 {
     # Assert if job control isn't enabled which is default when non-interactive
@@ -13,7 +13,10 @@ assert_m()
         *m*)
             ;;
         *)
-            : "${m:?job control is OFF}"
+            local m="${assert_m__ignore+yes}"
+            local func="${1-}"
+
+            : "${m:?${func:+$func: }job control is OFF}"
             ;;
     esac
 }
@@ -101,7 +104,7 @@ mksleepfd()
         unset -f rmfifo
 
         # Job control required
-        assert_m
+        assert_m 'mksleepfd'
 
         # File descriptors, especially standard input, inherited
         # by child job running sleepfd(), but it will open named
@@ -207,7 +210,7 @@ sleepx()
                     in_bash=''
                 else
                     # Job control required
-                    assert_m
+                    assert_m 'sleepx'
 
                     # This spawns new process in this script interpreter
                     # process group. Obviously this is suboptimal solution
@@ -286,6 +289,7 @@ syslog_cat()
         # no need to place each job into separate process group here:
         # subshell is a part of pipeline in parent process group
         set +m
+        assert_m__ignore=1
 
         printf -- '<45>syslog_cat: syslog proxy v0.1' "$0"
 
@@ -380,7 +384,9 @@ sig_handler_exit()
 # Usage: sig_handler <signal>
 sig_handler()
 {
-    local signal="${1:?missing 1st arg to sig_handler() <signal>}"
+    local func='sig_handler'
+
+    local signal="${1:?missing 1st arg to $func() <signal>}"
 
     # Usage: sig_handler__fatal {rc|''} <msg> ...
     sig_handler__fatal()
@@ -389,7 +395,7 @@ sig_handler()
             ${1:?missing 1st arg <rc>}
         local msg="${1-}" && [ -n "${1+x}" ] && shift ||:
 
-        printf >&2 -- "%s: sig_handler(): $msg\n" \
+        printf >&2 -- "%s: $func(): $msg\n" \
             "$0" "$@" \
             #
 
@@ -418,7 +424,7 @@ sig_handler()
     }
 
     # Job control required
-    assert_m
+    assert_m "$func"
 
     case "$signal" in
         'EXIT')
