@@ -125,9 +125,12 @@ COPY docker-entrypoint.sh /
 WORKDIR /root
 COPY ecosystem.config.js.templ ./
 
-## Make container executable
+## Shutdown nginx immediately
 
 STOPSIGNAL SIGTERM
 ENV PM2_KILL_SIGNAL=SIGTERM
 
+## Make container executable
+
+CMD []
 ENTRYPOINT [ "/docker-entrypoint.sh" ]

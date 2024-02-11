@@ -77,4 +77,5 @@ RUN sed -e "s,@user@,www-data,g" \
 
 ## Make container executable
 
+CMD [ "/etc/init.d/lighttpd", "start" ]
 ENTRYPOINT [ "/docker-entrypoint.sh" ]

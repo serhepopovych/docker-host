@@ -1,9 +1,14 @@
-#!/bin/sh -ue
+#!/bin/sh
+
+# Set option(s)
+set -e
+set -u
+#set -x
 
 # Requires: nc.openbsd(1), gawk(1), chroot(1), sleep(1), mkfifo(1), cat(1)
 #           chown(1), rm(1)
 
-# Usage: assert_m
+# Usage: assert_m [<func>]
 assert_m()
 {
     # Assert if job control isn't enabled which is default when non-interactive
@@ -13,30 +18,48 @@ assert_m()
         *m*)
             ;;
         *)
-            : "${m:?job control is OFF}"
+            local m="${assert_m__ignore+yes}"
+            local func="${1-}"
+
+            : "${m:?${func:+$func: }job control is OFF}"
             ;;
     esac
+}
+
+# Usage: getpid <var>
+getpid()
+{
+    local var="${1:?missing 1st arg to getpid() <var>}"
+
+    # Use Linux specific /proc filesystem layout instead of $(exec sh ...)
+    # to avoid subshell spawning and receiving yet another SIGCHLD that we
+    # may care about with sig_handler().
+
+    if cd -P '/proc/self'; then
+        eval "$var='${PWD##*/}'"
+        cd "$OLDPWD"
+    fi
 }
 
 # Usage: mksleepfd
 mksleepfd()
 {
-    # Do not spawn multiple $sleepjob's
-    if [ -n "${sleepjob-}" ]; then
-        if kill -0 "${sleepjob-}" 2>/dev/null; then
+    local pid
+    getpid pid
+
+    # If running in job or subshell: can't use wait(1) on $sleepjob which is
+    # needed to implement interruptible by signals infinite sleep (blocking)
+
+    eval "sleepjob=\"\${sleepjob_$pid-}\""
+
+    if [ -n "$sleepjob" ]; then
+        if kill -0 "$sleepjob" 2>/dev/null; then
             return 0
         else
             unset -v sleepjob
             return 1
         fi
     fi
-
-    # Not using more secure mktemp(1) to avoid
-    # external dependency on it
-    local fl="/tmp/.sleepfd.$$"
-
-    # Use restrictive permissions to minimize race
-    mkfifo -m 0600 "$fl" || return
 
     # Usage: sleepfd_redirect_stdin
     sleepfd_redirect_stdin()
@@ -53,7 +76,7 @@ mksleepfd()
         # to open it for read and/or write:
         #
         #     $ readlink /proc/$sleepjob/fd/0
-        #     /tmp/.sleepfd.$$ (deleted)
+        #     /tmp/.sleepfd.$pid (deleted)
 
         local sleepfl="/proc/$sleepjob/fd/0"
 
@@ -73,7 +96,7 @@ mksleepfd()
             local _
             while IFS=''; do
                 # Consume all read(1) data from named pipe ignoring errors,
-                # if any; interruptible by signals.
+                # if any; NOT interruptible by signals (i.e. trap ... not run)
                 read -r _ 2>/dev/null || [ $? -gt 128 ] || break
             done
         else
@@ -96,31 +119,31 @@ mksleepfd()
         [ ! -p "$fl" ] || rm -f "$fl" ||:
     }
 
-    if rmfifo "$fl" && [ -n "${sleepjob-&}" ]; then
+    # Job control required
+    assert_m 'mksleepfd'
+
+    # Not using more secure mktemp(1) to avoid
+    # external dependency on it
+    local fl="/tmp/.sleepfd.$pid"
+
+    # Use restrictive permissions to minimize race
+    mkfifo -m 0600 "$fl" || return
+
+    sleepfd <>"$fl" &
+    eval "sleepjob_$pid=\"\$!\""
+
+    if rmfifo "$fl"; then
         # Not polluting callers namespace
         unset -f rmfifo
 
-        # Job control required
-        assert_m
-
-        # File descriptors, especially standard input, inherited
-        # by child job running sleepfd(), but it will open named
-        # pipe through reference in our /proc/$$/fd/0 due to
-        # sanity checks against $sleepjob performed by sleepfd().
-
-        sleepfd &
-        sleepjob="$!"
-
         # Make sure $sleepjob is running or cleanup everything
         mksleepfd || return
-    else
-        # Will block here. Could be used in infinite sleep
-        # implementation that should set $sleepjob to empty.
-        sleepfd
-    fi <>"$fl"
 
-    # Above standard input redirect affects only `if' statement. On
-    # return from function it will be restored to callers one.
+        # Below standard input redirect affects only `if' statement on
+        # return from which it will be restored to the original one.
+        #
+        # It will block in open(2) until sleepfd() opens in read/write.
+    fi <"$fl"
 }
 
 # Usage: uptimex <var>
@@ -149,17 +172,20 @@ sleepx()
     # Usage: sleep_inf
     sleep_inf()
     {
-        # Do loop in case of $sleepjob isn't running:
-        # first mksleepfd() would unset it and next
-        # would establish internal pipe and block.
-
-        while :; do
-            local sleepjob="${sleepjob-}"
-
-            if mksleepfd; then
-                sleepfd
+        while mksleepfd; do
+            if wait "$sleepjob" 2>/dev/null; then
+                # It is not expected that $sleepjob terminates,
+                # especially with exit status 0
+                break
+            else
+                # interrupted by signal?
+                local rc=$?
+                [ $rc -gt 128 ] || exit $rc
             fi
         done
+
+        # Use same code as sleepfd()
+        exit 141
     }
 
     # Usage: sleep_num <secs> [<cb> [<args>...]]
@@ -177,10 +203,7 @@ sleepx()
             cb=':'
         fi
 
-        # This is bash(1) specific, readonly, variable (array)
-        local in_bash="${BASH_VERSINFO+yes}"
-
-        local now t rc _
+        local now t rc job
 
         local space="${oneshot:+ }"
         while "$cb" "$@"; do
@@ -193,39 +216,23 @@ sleepx()
                   ts=$now &&
                   [ $t -gt 0 ]
             do
-                # timeout ins't reached: sleep
+                # timeout ins't reached
+                sleep $t &
+                job="$!"
 
-                if [ -n "${in_bash}" ]; then
-                    # Do not redirect standard error to /dev/null, otherwise
-                    # it will hide all further shell command tracing (i.e.
-                    # set -x) output complicating debug process.
-                    read -t $t _ && rc=0 || rc=$?
-
-                    # interrupted by signals
-                    [ $rc -le 128 ] || continue
-                    # fallback to sleep(1) due to errors or data being read(1)
-                    in_bash=''
-                else
-                    # Job control required
-                    assert_m
-
-                    # This spawns new process in this script interpreter
-                    # process group. Obviously this is suboptimal solution
-                    # as there might be a race with kill(1) that would end
-                    # sleep(1) before timeout reached.
-                    sleep $t &
-
-                    oneshot="${oneshot-}$space$! "
-                    while kill -0 $! 2>/dev/null; do
-                        # interruptible by signals
-                        wait $! || [ $? -le 128 ] || continue
-                        break
-                    done
-                    oneshot="${oneshot%$space$! }"
-                fi
+                oneshot="${oneshot-}$space$job "
+                while kill -0 "$job" 2>/dev/null; do
+                    # interruptible by signals
+                    wait "$job" || [ $? -le 128 ] || continue
+                    break
+                done
+                oneshot="${oneshot%$space$job }"
             done
         done
     }
+
+    # Job control required
+    assert_m 'sleepx'
 
     local secs=''
 
@@ -286,6 +293,7 @@ syslog_cat()
         # no need to place each job into separate process group here:
         # subshell is a part of pipeline in parent process group
         set +m
+        assert_m__ignore=1
 
         printf -- '<45>syslog_cat: syslog proxy v0.1' "$0"
 
@@ -380,7 +388,9 @@ sig_handler_exit()
 # Usage: sig_handler <signal>
 sig_handler()
 {
-    local signal="${1:?missing 1st arg to sig_handler() <signal>}"
+    local func='sig_handler'
+
+    local signal="${1:?missing 1st arg to $func() <signal>}"
 
     # Usage: sig_handler__fatal {rc|''} <msg> ...
     sig_handler__fatal()
@@ -389,7 +399,7 @@ sig_handler()
             ${1:?missing 1st arg <rc>}
         local msg="${1-}" && [ -n "${1+x}" ] && shift ||:
 
-        printf >&2 -- "%s: sig_handler(): $msg\n" \
+        printf >&2 -- "%s: $func(): $msg\n" \
             "$0" "$@" \
             #
 
@@ -418,7 +428,7 @@ sig_handler()
     }
 
     # Job control required
-    assert_m
+    assert_m "$func"
 
     case "$signal" in
         'EXIT')
@@ -458,6 +468,11 @@ sig_handler()
                 # Yes, all fine. Either continued or signal not to our jobs.
                 return 0
             fi
+            ;;
+        'USR2')
+            printf >&2 'Jobs running by %u pid\n' "$$"
+            jobs -l >&2
+            return 0
             ;;
     esac
 
@@ -554,7 +569,7 @@ sig_handler()
                 fi
             done
             ;;
-        'HUP'|'INT'|'USR1'|'USR2')
+        'HUP'|'INT'|'USR1')
             # Send signal to main job process
             kill -$signal $pid 2>/dev/null ||:
             ;;
@@ -566,121 +581,204 @@ sig_handler()
 
 ################################################################################
 
-readonly \
-    user='@user@' \
-    name='@name@' \
-    pidfile='/run/@name@/@named@.pid' \
-    proxy_stdio='@proxy_stdio@' \
-    proxy_syslog='@proxy_syslog@' \
-    timeout=10 \
-    #
+# Usage: main <argv0> <exe> ...
+main()
+{
+    local prog_name="${0##*/}"
+    shift
 
-# Turn on job control to put each job into separage process group
-set -m
-
-# Setup signal handlers early
-trap 'sig_handler TERM' TERM
-trap 'sig_handler INT' INT
-trap 'sig_handler QUIT' QUIT
-trap 'sig_handler HUP' HUP
-trap 'sig_handler USR1' USR1
-trap 'sig_handler USR2' USR2
-trap 'sig_handler CHLD' CHLD
-
-jobs=''
-
-# Make sleep file descriptor to named pipe and redirect input
-if mksleepfd; then
-    jobs="$jobs$! "
-    sleepfd_redirect_stdin
-fi
-
-# Proxy stdandard output and error using named pipe to allow
-# daemon to write to them after switching user (e.g. using gosu)
-if [ -n "${proxy_stdio#\@proxy_stdio\@}" ]; then
-    readonly \
-        stdout="/dev/stdout.$name" \
-        stderr="/dev/stderr.$name" \
+    local \
+        user='@user@' \
+        name='@name@' \
+        pidfile='/run/@name@/@named@.pid' \
+        proxy_stdio='@proxy_stdio@' \
+        proxy_syslog='@proxy_syslog@' \
+        timeout=10 \
         #
 
-    # Remove original symlinks
-    rm -f "$stdout" "$stderr"
+    # Turn on job control to put each job into separage process group
+    set -m
 
-    # Create named pipes group owned by user
-    mkfifo -m 0660 "$stdout" "$stderr"
-    chown ":$user" "$stdout" "$stderr"
+    # Setup signal handlers early
+    trap 'sig_handler TERM' TERM
+    trap 'sig_handler INT' INT
+    trap 'sig_handler QUIT' QUIT
+    trap 'sig_handler HUP' HUP
+    trap 'sig_handler USR1' USR1
+    trap 'sig_handler USR2' USR2
+    trap 'sig_handler CHLD' CHLD
 
-    # Spawn cat(1) as input/output proxy
-    cat "$stdout" &
-    jobs="$jobs$! "
-    cat "$stderr" >&2 &
-    jobs="$jobs$! "
+    # Used by sig_handler()
+    local \
+        pid='' \
+        jobs='' \
+        oneshot='' \
+        #
 
+    # Make sleep file descriptor to named pipe and redirect input
+    if mksleepfd; then
+        jobs="$jobs$sleepjob "
+        sleepfd_redirect_stdin
+    fi
+
+    # Proxy stdandard output and error using named pipe to allow
+    # daemon to write to them after switching user (e.g. using gosu)
+    if [ -n "${proxy_stdio#\@proxy_stdio\@}" ]; then
+        local \
+            stdout="/dev/stdout.$name" \
+            stderr="/dev/stderr.$name" \
+            #
+
+        # Remove original symlinks
+        rm -f "$stdout" "$stderr"
+
+        # Create named pipes group owned by user
+        mkfifo -m 0660 "$stdout" "$stderr"
+        chown ":$user" "$stdout" "$stderr"
+
+        # Spawn cat(1) as input/output proxy
+        cat "$stdout" &
+        jobs="$jobs$! "
+        cat "$stderr" >&2 &
+        jobs="$jobs$! "
+
+        # Above readers will be blocked in open(2) until first writer (i.e.
+        # file descriptor that opens named pipe in write-only or read/write
+        # mode) comes.
+    else
+        local stdout='' stderr=''
+    fi
+
+    # Proxy syslog to either standard error or output file descriptor that
+    # either inherited or point to named pipe when proxifying standard I/O.
+    if [ -n "${proxy_syslog#\@proxy_syslog\@}" ]; then
+        local \
+            syslog="$proxy_syslog" \
+            #
+
+        # Usage: syslogd
+        syslogd()
+        {
+            local syslog_cat__strip_pri='1'
+            syslog_cat "$syslog"
+        }
+
+        syslogd &
+        jobs="$jobs$! "
+    else
+        local syslog=''
+    fi
+
+    ## Remove stale pid file, if any
+
+    rm -f "$pidfile" ||:
+
+    ## Run application
+
+    # Usage: run <exe> ...
+    run()
     {
-        # This would block until cat(1) opens for reading.
-        exec >"$stdout" 2>"$stderr"
+        local exe="${1:?missing 1st arg to run() <exe>}"
+        shift
+
+        "$exe" "$@" ||:
+
         # This would block indefinitely to keep $stdout and $stderr
-        # open in this subshell preventing cat(1) readers from EOF.
+        # open in this subshell, preventing cat(1) readers from exit.
+        sleepfd
+    }
+
+    # Usage: start <exe> ...
+    start()
+    {
+       run "$@" &
+       jobs="$jobs$! "
+    }
+
+    if [ -n "${stdout-}" ]; then
+       # Below output and error redirects affects only this `if' statement:
+       # on return from which they will be restored to the original ones.
+       #
+       # This will wake up cat(1) readers, started by $proxy_stdio, right after
+       # both input and output file descriptors opened in write-only mode.
+
+        if :; then
+            start "$@"
+        fi >"$stdout" 2>"$stderr"
+    else
+        start "$@"
+    fi
+
+    ## Main loop
+
+    printf >&2 '%s: running as %u pid\n' "$prog_name" "$$"
+
+    # Usage: cb ...
+    cb()
+    {
+        local pidval
+        if [ -s "$pidfile" ] && read -r pidval _ <"$pidfile" &&
+           [ "$pidval" -gt 0 ] 2>/dev/null && kill -0 "$pidval" 2>/dev/null
+        then
+            pid="$pidval"
+            return 1
+        fi
+    }
+    sleepx $timeout cb
+
+    if [ -n "$pid" ]; then
         sleepx inf
-    } &
-    jobs="$jobs$! "
-fi
-
-# Proxy syslog to either standard error or output file descriptor that
-# either inherited or point to named pipe when proxifying standard I/O.
-if [ -n "${proxy_syslog#\@proxy_syslog\@}" ]; then
-    readonly \
-        syslog="$proxy_syslog" \
-        #
-
-    syslog_cat__strip_pri='1' \
-        syslog_cat "$syslog" &
-    jobs="$jobs$! "
-fi
-
-# Remove stale pid file, if any
-rm -f "$pidfile" ||:
-
-# Run through SysV init script
-{
-    eval "${stdout+exec  >'$stdout'}"
-    eval "${stderr+exec 2>'$stderr'}"
-
-    exec /etc/init.d/$name start
-} &
-pid=''
-oneshot="$!"
-
-# Wait for pid file
-
-# Usage: cb ...
-cb()
-{
-    local pidval
-    if [ -s "$pidfile" ] && read -r pidval _ <"$pidfile" &&
-       [ "$pidval" -gt 0 ] 2>/dev/null && kill -0 "$pidval" 2>/dev/null
-    then
-        pid="$pidval"
-        return 1
+    else
+        sig_handler 'TERM'
     fi
 }
-sleepx $timeout cb
 
-# Watch for main process
-if [ -n "$pid" ]; then
-    while kill -0 $pid; do
-        sleepx $timeout
-    done
+if [ -n "${HIDE_ARGS+yes}" ]; then
+    if :; then
+        # Close write-only file descriptor right after file it
+        # refers to was opened read-only as standard input for
+        # this `if' statement
+        exec 4>&-
+
+        arg=''
+        while IFS='' read -r arg; do
+            set -- "$@" "${arg-}"
+        done
+        unset -v arg
+
+        # Below will open file descriptor reference
+        # as regular file in read-only mode at pos 0
+    fi </dev/fd/4
+
+    # Do not export to external commands
+    # (but still to subshells)
+    unset -v HIDE_ARGS
+
+    main "$0" "$@"
+else
+    # At least dash(1) job control (set -m) requires
+    # to be attached to a controlling terminal (see tcgetpgrp(3).
+    if [ ! -t 0 ]; then
+        # bash(1) doesn't have such requirement:
+        # have it as fallback
+        exe='/bin/bash'
+    fi
+
+    # Pass arguments through a file and remove them from
+    # our command line to look ps(1) output pretty.
+
+    t="/tmp/.${0##*/}.$$"
+    exec 4>"$t"
+    rm -f "$t" || exit 125
+
+    # Write arguments to file
+    while [ $# -gt 0 ]; do
+        printf -- '%s\n' "$1"
+        shift
+    done >&4
+
+    # Use interpreter explicitly, not relying on shebang line
+    # and fact that this file executable or can be executed.
+
+    HIDE_ARGS='yes' exec "${exe:-/bin/sh}" "$0"
 fi
-
-# Exit by sending TERM signal to self
-
-# Usage: cb ...
-cb()
-{
-    kill -TERM "$1" || return
-}
-sleepx $timeout cb $$
-
-# Last restort
-sig_handler_exit 125

@@ -72,4 +72,5 @@ RUN sed -e "s,@user@,bird,g" \
 
 ## Make container executable
 
+CMD [ "/etc/init.d/bird", "start" ]
 ENTRYPOINT [ "/docker-entrypoint.sh" ]

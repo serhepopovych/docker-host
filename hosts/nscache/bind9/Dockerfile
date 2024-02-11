@@ -77,4 +77,5 @@ RUN sed -e "s,@user@,bind,g" \
 
 ## Make container executable
 
+CMD [ "/etc/init.d/named", "start" ]
 ENTRYPOINT [ "/docker-entrypoint.sh" ]

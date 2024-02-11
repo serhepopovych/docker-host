@@ -83,4 +83,5 @@ RUN sed -e 's,@user@,_chrony,g' \
 
 ## Make container executable
 
+CMD [ "/etc/init.d/chrony", "start" ]
 ENTRYPOINT [ "/docker-entrypoint.sh" ]

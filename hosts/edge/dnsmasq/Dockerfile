@@ -79,4 +79,5 @@ RUN sed -e "s,@user@,dnsmasq,g" \
 
 ## Make container executable
 
+CMD [ "/etc/init.d/dnsmasq", "start" ]
 ENTRYPOINT [ "/docker-entrypoint.sh" ]

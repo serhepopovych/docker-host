@@ -10,7 +10,7 @@ module.exports = {
     name: "nginx",
     interpreter: "none",
     script: "/usr/sbin/nginx.sh",
-    args: [ "-g", "daemon off;" ],
+    args: [ "exec", "/docker-entrypoint.ngx", "nginx", "-g", "daemon off;" ],
     cwd: "/etc/nginx",
     watch: false,
     treekill: false,
