@@ -198,7 +198,6 @@ up()
         --build-arg=pma_ip="$pma_ip" \
         --build-arg=gua_ip="${gua_ip:-127.0.0.1}" \
         --build-arg=edge_ip="${edge_ip:-127.0.0.1}" \
-        --build-arg=dns_ip="${edge_ip:-8.8.8.8}" \
         #
 
     docker_volume \

@@ -79,7 +79,7 @@ ARG gua_ip=192.0.2.222
 # edge
 ARG edge_ip=192.0.2.1
 # dns
-ARG dns_ip=8.8.8.8
+ARG dns_ip=127.0.0.11
 
 COPY nginx/conf.d/*.conf /etc/nginx/conf.d/
 COPY nginx/inc.d/*.inc /etc/nginx/inc.d/
