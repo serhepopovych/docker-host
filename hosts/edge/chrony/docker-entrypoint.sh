@@ -41,11 +41,10 @@ getpid()
     fi
 }
 
-# Usage: waitx <job> [<signal>]
+# Usage: waitx <job>
 waitx()
 {
     local job="${1:?missing 1st arg to waitx() <job>}"
-    local signal="${2:-CONT}"
     local rc
 
     # Signal handlers would interrupt wait(1) and run in it's caller context
@@ -58,11 +57,7 @@ waitx()
     # by waitx(). Local may override global ones (e.g. local pid; getpid pid;
     # would override global pid=).
 
-    until rc=0 && wait "$job"; do
-        # wait(1) could be interrupted by signals received by interpreter that
-        # further may decide that signal ignored by the script (e.g.
-        # trap '' TERM); interrupted wait(1) will return 128 + <signo> status
-
+    while :; do
         # Process
         #   1) terminated before we kill(1) it: wait(1) has return code
         #   2) terminated normally           : rc <= 128
@@ -70,20 +65,17 @@ waitx()
         #   4) wait(1) interrupted by signal : rc = 128 + <signo> (x)
         #   5) isn't our child process/job   : rc = 127
 
-        rc=$?
-        if [ $rc -le 128 ]; then
-            # not a 128 + <signo>: exited
-            break
-        elif kill -$signal "$job" 2>/dev/null; then
-            # interrupted by signal
-            continue
-        else
-            # not running, exit status >128
-            break
-        fi
-    done
+        wait "$job" && rc=0 || rc=$?
 
-    return $rc
+        # wait(1) could be interrupted by signal received by interpreter but
+        # ignored by the script (e.g. trap '' TERM)
+        #
+        # wait(1) normally return 128 + <signo> status or 0 if interrupted
+        # within signal handler at least on dash(1); in that case best way
+        # is to check if job still exists using kill(1) and not rely on $rc.
+
+        kill -CONT "$job" 2>/dev/null || return $rc
+    done
 }
 
 # Usage: pausefd
@@ -504,107 +496,82 @@ sig_handler()
             # No reentrance
             trap '' 'TERM' 'QUIT' 'CHLD' 'EXIT'
 
-            local tries=3
+            # This would use up to 15 seconds to terminate/kill everything.
+            local tmout=3
 
-            # Send $signal to the main process first, then try SIGTERM unless
-            # $signal wasn't it initially. Otherwise terminate it in the same
-            # way as supplementary $jobs.
-            local rc=127 running
-            while [ -n "$pid" ]; do
-                running=''
-                if kill -CONT $pid; then
+            # Try to terminate main process first and read
+            # it's exit status if it is our child process.
+
+            local rc=127
+
+            # Usage: cb <signal> [<pid>]
+            cb()
+            {
+                # At least one pid/job given
+                [ -n "${2-}" ] || return 1
+
+                # Resume process before sending signal
+                if kill -CONT "$2" 2>/dev/null; then
+                    # Before sending signal
+                    sig_handler__hook "$@" ||:
+
                     # Process resumed, send signal
-                    if kill -$signal $pid; then
-                        running='yes'
-                    fi
-                fi 2>/dev/null
-
-                # Do wait(1) if $pid is our child, resending signal
-                waitx $pid $signal && rc=0 || rc=$?
-
-                if [ $rc -ne 127 ]; then
-                    # Valid return code, not running.
-                    break
-                else
-                    [ -n "$running" ] || break
-
-                    # Signal was sent, but child isn't our process/job and
-                    # thus we can't track it's status with wait(1). Give it
-                    # some time to handle signal and then retry.
-                    if [ $((tries -= 1)) -gt 0 ]; then
-                        sleepx 1
-                    else
-                        case "$signal" in
-                            'TERM')
-                                  # Still running, process like $jobs
-                                  rc=127
-                                  break
-                                  ;;
-                            *)
-                                  signal='TERM'
-                                  ;;
-                        esac
-                        tries=3
+                    if kill "-$1" "$2" 2>/dev/null; then
+                        return 0
                     fi
                 fi
-            done
-            sig_handler__jobs '' $jobs $oneshot
 
-            local pgrp
-            if [ -n "$pid" ]; then
-                pgrp="-$pid"
-                jobs="${jobs:- $pgrp }"
-            else
-                # Pick first job from $jobs, if any
-                pgrp="${jobs# }"
-                pgrp="${pgrp%% *}"
-                pgrp="${pgrp:+-$pgrp}"
+                # Read exit status or 127 if $pid is NOT our child
+                wait "$2" 2>/dev/null && rc=0 || rc=$?
+
+                return 1
+            }
+
+            # Send $signal to the main process first,
+            # then TERM, unless $signal wasn't it initially.
+            sleepx $tmout cb "$signal" $pid
+
+            if [ "$signal" != 'TERM' ]; then
+                sleepx $tmout cb 'TERM' $pid
             fi
 
-            signal='TERM'
-            tries=5
+            # Otherwise it will be terminated in the
+            # same way as supplementary $jobs.
 
-            while :; do
-                # Before sending signal
-                sig_handler__hook $signal $jobs ||:
+            # Usage: cb <signal> [<jobs>...]
+            cb()
+            {
+                [ -n "${2-}" ] || return 1
 
-                # Resume processes before sending signal
-                kill -CONT $jobs 2>/dev/null ||:
+                local signal="$1"
+                shift
 
-                # We would send signals to process group lead first to give
-                # it time to react and end it's child processes.
-                #
-                # After that we will send signals to entire process group to
-                # terminate remaining process(es) in these groups.
-                if ! kill -$signal $jobs 2>/dev/null; then
-                    if ! [ -n "${jobs##* $pgrp *}" ]; then
-                        # Note that bash(1) does not call signal handlers set
-                        # within signal handler (i.e. trap 'trap <code> <sig>'
-                        # <sig> will not call <code> for second and further
-                        # <sig>s): exit explicitly.
-                        sig_handler_exit $rc
+                if kill -CONT "$@" 2>/dev/null; then
+                    sig_handler__hook $signal "$@" ||:
+
+                    if kill -$signal "$@" 2>/dev/null; then
+                        # If at least one receives it
+                        return 0
                     fi
                 fi
 
-                if [ -z "${jobs##*-*}" ]; then
-                    if [  $((tries -= 1)) -gt 0 ]; then
-                        sleepx 1
-                    else
-                        signal='KILL'
-                        tries=5
-                    fi
-                else
-                    # wait(1) will sleep until process group lead(s) finished,
-                    # returning status of zero in that case, or interrupted by
-                    # script trapped signal that interpretator receives,
-                    # returning status of 128 + <signo>.
-                    while ! wait; do
-                        :
-                    done
+                return 1
+            }
 
-                    sig_handler__jobs '-' $pid $jobs
-                fi
-            done
+            # We would send TERM to process group lead first to give
+            # it time to react and end it's child processes.
+            sig_handler__jobs '' $jobs $oneshot
+            sleepx $tmout cb 'TERM' $jobs
+
+            # After that we will send TERM to entire process group to
+            # try to terminate remaining process(es) in these groups.
+            sig_handler__jobs '-' $pid $jobs
+            sleepx $tmout cb 'TERM' $jobs
+
+            # Finally kill remaining process(es) in these groups.
+            sleepx $tmout cb 'KILL' $jobs
+
+            sig_handler_exit $rc
             ;;
         'HUP'|'INT'|'USR1')
             # Send signal to main job process
