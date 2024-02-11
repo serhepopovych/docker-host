@@ -52,9 +52,13 @@ readonly \
 parse_args_usage()
 {
     cat <<EOF
+
     --ip_guacd=${ip_guacd:-<dynamic>}
         IP address in network given by --network for guacd proxy. Use
         dynamic IP if empty
+
+    --tag_guacd=$tag_guacd
+        Image tag (e.g. latest) for guacd proxy. Use default tag if empty.
 
   for guacamole:
     --gua_db_name=$gua_db_name
@@ -82,6 +86,10 @@ EOF
 # Usage: parse_args_pre ...
 parse_args_pre()
 {
+    # tag
+    tag='dh'
+    tag_guacd='latest'
+
     # read profile
     eval "local ${app}_name"
     eval "local ${app}_image"
@@ -133,12 +141,19 @@ parse_args_post()
 {
     readonly gua_ip="$ip"
     parse_args__post "$@"
+
+    tag_guacd="${tag_guacd##*:}" && tag_guacd="${tag_guacd:-latest}"
 }
 
 # Usage: parse_args_opt --<name>=[<value>]
 parse_args_opt()
 {
     case "$1" in
+        # tag
+        --tag_guacd=*)
+            arg "$1"
+            ;;
+
         # network
         --ip_guacd=*)
             arg "$1" 'non-empty-value'
@@ -218,7 +233,7 @@ up()
     local name_guacamole="guac-guacamole${inst:+_$inst}"
     local image_guacamole="${_app}/guacamole:$tag"
     local name_guacd="guac-guacd${inst:+_$inst}"
-    local image_guacd="${_app}/guacd:$tag"
+    local image_guacd="${_app}/guacd:$tag_guacd"
     local name
     local image
 
@@ -226,13 +241,10 @@ up()
 
     name="$name_guacamole" \
         docker_rm
-    name="$name_guacd" \
-        docker_rm
 
-    image="$image_guacamole" \
-        docker_pull
-    image="$image_guacd" \
-        docker_pull
+    name="$name_guacamole" image="$image_guacamole" \
+        docker_build "$build_args" \
+            #
 
     # Usage: mysql_init_db
     mysql_init_db()
@@ -275,6 +287,12 @@ up()
             #
 
     ## guacd
+
+    name="$name_guacd" \
+        docker_rm
+
+    image="$image_guacd" \
+        docker_pull
 
     image="$image_guacd" \
         docker_volume \
