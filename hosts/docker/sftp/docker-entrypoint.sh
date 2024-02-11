@@ -1,4 +1,9 @@
-#!/bin/sh -ue
+#!/bin/sh
+
+# Set option(s)
+set -e
+set -u
+#set -x
 
 # Requires: nc.openbsd(1), gawk(1), chroot(1), sleep(1), mkfifo(1), cat(1)
 #           chown(1), rm(1)
@@ -751,6 +756,17 @@ if [ -n "${HIDE_ARGS+yes}" ]; then
 
     main "$0" "$@"
 else
+    # At least dash(1) job control (set -m) requires
+    # to be attached to a controlling terminal (see tcgetpgrp(3).
+    if [ ! -t 0 ]; then
+        # bash(1) doesn't have such requirement:
+        # have it as fallback
+        exe='/bin/bash'
+    fi
+
+    # Pass arguments through a file and remove them from
+    # our command line to look ps(1) output pretty.
+
     t="/tmp/.${0##*/}.$$"
     exec 4>"$t"
     rm -f "$t" || exit 125
@@ -761,5 +777,8 @@ else
         shift
     done >&4
 
-    HIDE_ARGS='yes' exec "$0"
+    # Use interpreter explicitly, not relying on shebang line
+    # and fact that this file executable or can be executed.
+
+    HIDE_ARGS='yes' exec "${exe:-/bin/sh}" "$0"
 fi
