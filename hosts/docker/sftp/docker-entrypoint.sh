@@ -196,13 +196,19 @@ sig_handler()
         local pgroup="${1:+-}"
         shift
 
-        jobs=''
+        jobs=' '
         while [ $# -gt 0 ]; do
             if [ -n "${1##*[!0-9]*}" ]; then
-                jobs="${jobs:+$jobs }$pgroup$1"
+                if [ -n "${jobs##* $1 *}" ]; then
+                    jobs="$jobs$pgroup$1 "
+                fi
             fi
             shift
         done
+
+        # $jobs is either empty, or string that
+        # begins and ends with single space
+        jobs="${jobs# }" && jobs="${jobs:+ $jobs}"
     }
 
     # Assert if job control isn't enabled which is default when non-interactive
@@ -276,14 +282,17 @@ sig_handler()
                     [ $rc -ne $prev_rc ] || break
                 done
             done
-            jobs="$jobs${oneshot:+${jobs:+ }$oneshot}"
+            sig_handler__jobs '' $jobs $oneshot
 
             local pgrp
             if [ -n "$pid" ]; then
                 pgrp="-$pid"
-                jobs="${jobs:-$pgrp}"
+                jobs="${jobs:- $pgrp }"
             else
-                pgrp="-${jobs%% *}"
+                # Pick first job from $jobs, if any
+                pgrp="${jobs# }"
+                pgrp="${pgrp%% *}"
+                pgrp="${pgrp:+-$pgrp}"
                 rc=123
             fi
 
@@ -302,10 +311,7 @@ sig_handler()
                 # After that we will send signals to entire process group to
                 # terminate remaining process(es) in these groups.
                 if ! kill -$signal $jobs 2>/dev/null; then
-                    jobs=" $jobs "
-                    if [ -n "${jobs##* $pgrp *}" ]; then
-                        jobs="${jobs# }" && jobs="${jobs% }"
-                    else
+                    if ! [ -n "${jobs##* $pgrp *}" ]; then
                         # Note that bash(1) does not call signal handlers set
                         # within signal handler (i.e. trap 'trap <code> <sig>'
                         # <sig> will not call <code> for second and further
