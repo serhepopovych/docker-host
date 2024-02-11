@@ -6,10 +6,7 @@ FROM ubuntu:$UBUNTU_TAG
 RUN apt-get -qq update \
     && apt-get -qq dist-upgrade \
     && apt-get -qq --no-install-recommends --no-install-suggests install \
-       apt-utils ca-certificates tzdata wget curl gnupg rsync netcat telnet \
-       iproute2 net-tools mtr-tiny iputils-ping iputils-tracepath \
-       lsof htop mc screen vim-tiny nano less \
-       openssh-server
+       apt-utils vim-tiny less ca-certificates tzdata gosu
 
 ## Configure timezone
 
@@ -24,28 +21,10 @@ RUN for timezone in "$timezone" 'US/Eastern' 'Etc/UTC'; do \
       fi; \
     done
 
-## Install nodejs & pm2
+## Install application
 
-ARG NODE_MAJOR=20
-
-RUN K=/etc/apt/keyrings && H=https://deb.nodesource.com \
- && install -d  "$K" \
- && curl -fsSL $H/gpgkey/nodesource-repo.gpg.key | \
-    gpg --dearmor -o $K/nodesource.gpg \
- && echo "deb [signed-by=$K/nodesource.gpg] $H/node_$NODE_MAJOR.x nodistro main" | \
-    tee /etc/apt/sources.list.d/nodesource.list \
- && apt-get -qq update \
- && apt-get -qq install nodejs
-
-RUN npm install pm2 -g
-RUN pm2 install pm2-logrotate && pm2 kill
-
-## Install docker-entrypoint.sh and ecosystem.config.js.templ
-
-COPY docker-entrypoint.sh /
-
-WORKDIR /root
-COPY ecosystem.config.js ./
+RUN apt-get -qq --no-install-recommends --no-install-suggests install \
+    openssh-server netcat-openbsd gawk
 
 ## Configure openssh
 
@@ -61,42 +40,64 @@ RUN H=/etc/ssh/ \
         -i "${H}sshd_config.d/sftp.conf" \
  && find "$H" -name 'ssh_host_*_key*' -a -type f -a -delete \
  && for t in rsa ecdsa ed25519; do \
-      t="hostkeys${H}ssh_host_${t}_key" && \
-      ln -sf "$t"     "$H" && \
-      ln -sf "$t.pub" "$H"; \
+        t="hostkeys${H}ssh_host_${t}_key" && \
+        ln -sf "$t"     "$H" && \
+        ln -sf "$t.pub" "$H"; \
     done \
- && install -d /run/sshd
-
-COPY openssh/mc.ini \
-     openssh/screenrc \
-     /tmp/
-
-RUN make_skel() { \
-      local H="$1" \
-   && install -D -m 0644 /tmp/mc.ini "$H/.config/mc/ini" \
-   && install -D -m 0644 /tmp/screenrc "$H/.screenrc" \
-   && install -d "$H/.local/share" "$H/.local/bin" "$H/.cache" \
-   && install -d -m 0700 "$H/.ssh" "$H/tmp" \
-   && ln -sf '.local/bin' "$H/bin" || return; \
-    } \
- && make_skel /root \
- && make_skel /etc/skel \
- && rm -f /tmp/mc.ini /tmp/screenrc
+ && sed -e '/^check_config\(\)/{' \
+        -e 'icheck_hostkeys() \{\' \
+        -e '    local t="/etc/ssh/hostkeys/etc/ssh/ssh_host_rsa_key"\' \
+        -e '    if [ ! -e "$t" ]; then\' \
+        -e '        t="${t%/*}"\' \
+        -e '        mkdir -p "$t"\' \
+        -e '        t="${t%/etc/ssh}"\' \
+        -e '        ssh-keygen -A -f "$t" ||:\' \
+        -e '    fi\' \
+        -e '\}\' \
+        -e '' \
+        -e '}' \
+        -e 's,^\(\s\+\)\(check_privsep_dir\s*\)$,\1\2\n\1check_hostkeys\n,' \
+        -i /etc/init.d/ssh \
+ && ln -sf . /run/ssh \
+ && sed -e '$ aSSHD_OPTS="${SSHD_OPTS:+$SSHD_OPTS }-D"' \
+        -i /etc/default/ssh \
+ && sed -e '/\s\+--start\s\+/{' \
+        -e '  s,\(\s\+--quiet\s\+\),\1--background --no-close ,' \
+        -e '  b' \
+        -e '}' \
+        -e '/\s\+--stop\s\+/{' \
+        -e '  s,\s\+--exec\s\+\S\+\s*\(;\s*\),\1,' \
+        -e '  b' \
+        -e '}' \
+        -i /etc/init.d/ssh
 
 ARG user_name=exchange
 # No login by default
 ARG crypt_user_passwd=*
 
-RUN install -d -m 0777 \
-    "$data_dir/Archive" \
-    "$data_dir/Errors" \
-    "$data_dir/Reports" \
-    "$data_dir/Payments" \
-    "$data_dir/ListUpload" \
-    "$data_dir/Prompts" \
- && useradd -G users \
-            -s /usr/sbin/nologin \
-            -p "$crypt_user_passwd" -m "$user_name"
+RUN useradd -G users \
+      -s /usr/sbin/nologin \
+      -p "$crypt_user_passwd" -m "$user_name" \
+ && install -d -m 3711 \
+      "$data_dir/dev" \
+ && install -d -m 0777 \
+      "$data_dir/Archive" \
+      "$data_dir/Errors" \
+      "$data_dir/Reports" \
+      "$data_dir/Payments" \
+      "$data_dir/ListUpload" \
+      "$data_dir/Prompts"
+
+## Install docker-entrypoint.sh
+
+COPY docker-entrypoint.sh /
+
+RUN sed -e "s,@user@,root,g" \
+        -e "s,@name@,ssh,g" \
+        -e "s,@named@,sshd,g" \
+        -e "s,@proxy_stdio@,@proxy_stdio@,g" \
+        -e "s,@proxy_syslog@,${data_dir%/*}/dev/log,g" \
+        -i /docker-entrypoint.sh
 
 ## Make container executable
 
