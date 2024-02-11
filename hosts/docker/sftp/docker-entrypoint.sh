@@ -448,6 +448,14 @@ sig_handler()
                 #   5) isn't our child process/job   : rc = 127
                 kill -$signal $pid 2>/dev/null || [ $rc -ge 256 ] || break
 
+                # Signal was sent, but child isn't our process/job and
+                # cannot track it's status with wait(1), give some time
+                # to main process to handle signal and exit.
+                if [ $rc -eq 127 ]; then
+                    sleepx 1
+                    continue
+                fi
+
                 # wait(1) could be interrupted by signals received by
                 # interpreter that further may decide that signal
                 # ignored by the script (e.g. trap '' TERM);
