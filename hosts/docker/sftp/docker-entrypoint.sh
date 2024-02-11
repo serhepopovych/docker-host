@@ -217,17 +217,13 @@ sig_handler()
             ;;
     esac
 
+    local pid="${pid-}"
+    [ "${pid:-0}" -gt 0 ] 2>/dev/null || pid=''
+
     local jobs="${jobs-}"
     sig_handler__jobs '' $jobs
 
     local oneshot="${oneshot-}"
-
-    local pid="${pid-}" pgrp=''
-    if [ "${pid:-0}" -gt 0 ] 2>/dev/null; then
-        pgrp="-$pid"
-    else
-        pid=''
-    fi
 
     case "$signal" in
         'CHLD')
@@ -273,8 +269,16 @@ sig_handler()
                     [ $rc -ne $prev_rc ] || break
                 done
             done
-            jobs="${oneshot:+$oneshot${jobs:+ }}$jobs"
-            jobs="${jobs:-$pgrp}"
+            jobs="$jobs${oneshot:+${jobs:+ }$oneshot}"
+
+            local pgrp
+            if [ -n "$pid" ]; then
+                pgrp="-$pid"
+                jobs="${jobs:-$pgrp}"
+            else
+                pgrp="-${jobs%% *}"
+                rc=123
+            fi
 
             local tries
 
@@ -328,7 +332,7 @@ sig_handler()
             kill -$signal $pid 2>/dev/null ||:
             ;;
         *)
-            sig_handler__fatal 123 'unsupported signal %s' "$signal"
+            sig_handler__fatal 124 'unsupported signal %s' "$signal"
             ;;
     esac
 }
@@ -375,9 +379,9 @@ if [ -n "${proxy_stdio#\@proxy_stdio\@}" ]; then
 
     # Spawn cat(1) as input/output proxy
     cat "$stdout" &
-    jobs="$jobs $!"
+    jobs="$jobs$! "
     cat "$stderr" >&2 &
-    jobs="$jobs $!"
+    jobs="$jobs$! "
 
     # This serves two purposes:
     #  1) reopens file descriptors to point to named pipes making them
@@ -396,7 +400,7 @@ if [ -n "${proxy_syslog#\@proxy_syslog\@}" ]; then
 
     syslog_cat__strip_pri='1' \
         syslog_cat "$syslog" &
-    jobs="$jobs $!"
+    jobs="$jobs$! "
 fi
 
 # Remove stale pid file, if any
@@ -449,4 +453,4 @@ cb()
 sleepx $timeout cb $$
 
 # Last restort
-sig_handler_exit 124
+sig_handler_exit 125
