@@ -6,40 +6,47 @@
 # Usage: sleepx <secs> [<cb> [<args>...]]
 sleepx()
 {
-    local secs=''
-    [ "${1-}" -ge 0 ] 2>/dev/null ||
-        "${secs:?missing or not a number 1st arg to sleepx() <secs>}"
-    secs="$1"
+    local space=''
+
+    local secs="${1-}"
+    [ "$secs" -ge 0 -a "$secs" -le 2147483647 ] 2>/dev/null ||
+        "${space:?missing or not valid number 1st arg to sleepx() <secs>}"
 
     local cb="${2-}"
     cb="${cb#:}"
     [ $# -lt 2 ] || shift 2
 
+    local nr=1
+    if [ -z "$cb" ]; then
+        nr=$secs
+        cb=':'
+    fi
+
     # This is bash(1) specific, readonly, variable (array)
     local in_bash="${BASH_VERSINFO+yes}"
 
-    if [ -z "$cb" -a -n "${in_bash}" ]; then
-        read -t $secs ||:
-    else
-        cb="${cb:-:}"
+    space="${oneshot:+ }"
+    while "$cb" "$@"; do
+        [ $((secs -= nr)) -ge 0 ] || break
 
-        while "$cb" "$@"; do
-            [ $((secs -= 1)) -ge 0 ] || break
-
+        if [ -n "${in_bash}" ]; then
+            read -t $nr ||:
+        else
             # This spawns new process in this script interpreter
             # process group. Obviously this is suboptimal solution
             # as there might be a race with kill(1) that would end
             # sleep(1) before timeout reached.
-            sleep 1 &
+            sleep $nr &
 
-            # interruptible by signal
+            oneshot="${oneshot-}$space$! "
             while :; do
                 # interruptible by signals
                 wait $! || [ $? -le 128 ] || continue
                 break
             done
-        done
-    fi
+            oneshot="${oneshot%$space$! }"
+        fi
+    done
 }
 
 # Usage: syslog_cat {</path/to/socket1> ...|<SEP/path/to/socket1SEP...>}
@@ -427,19 +434,9 @@ sleepx $timeout cb
 
 # Watch for main process
 if [ -n "$pid" ]; then
-    space="${oneshot:+ }"
     while kill -0 $pid; do
-        sleep $timeout &
-
-        oneshot="$oneshot$space$!"
-        while :; do
-            # interruptible by signals
-            wait $! || [ $? -le 128 ] || continue
-            break
-        done
-        oneshot="${oneshot%$space$!}"
+        sleepx $timeout
     done
-    unset space
 fi
 
 # Exit by sending TERM signal to self
