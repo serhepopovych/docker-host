@@ -172,7 +172,7 @@ sig_handler()
     # Usage: sig_handler__fatal {rc|''} <msg> ...
     sig_handler__fatal()
     {
-        local rc=${1:-$?}   && [ -n "${1+x}" ] && shift ||
+        local rc=${1:-$?} && [ -n "${1+x}" ] && shift ||
             ${1:?missing 1st arg <rc>}
         local msg="${1-}" && [ -n "${1+x}" ] && shift ||:
 

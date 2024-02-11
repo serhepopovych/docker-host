@@ -211,7 +211,7 @@ parse_args_post()
 
     # 2> Add '/.'
     if [ -n "${nfs_volume_path##*/*}" -o -z "${nfs_volume_path%/*}" ]; then
-       nfs_volume_path="${nfs_volume_path:-/.}/."
+        nfs_volume_path="${nfs_volume_path:-/.}/."
     fi
 }
 
