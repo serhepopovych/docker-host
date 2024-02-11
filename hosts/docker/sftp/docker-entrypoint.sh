@@ -572,121 +572,199 @@ sig_handler()
 
 ################################################################################
 
-readonly \
-    user='@user@' \
-    name='@name@' \
-    pidfile='/run/@name@/@named@.pid' \
-    proxy_stdio='@proxy_stdio@' \
-    proxy_syslog='@proxy_syslog@' \
-    timeout=10 \
-    #
-
-# Turn on job control to put each job into separage process group
-set -m
-
-# Setup signal handlers early
-trap 'sig_handler TERM' TERM
-trap 'sig_handler INT' INT
-trap 'sig_handler QUIT' QUIT
-trap 'sig_handler HUP' HUP
-trap 'sig_handler USR1' USR1
-trap 'sig_handler USR2' USR2
-trap 'sig_handler CHLD' CHLD
-
-jobs=''
-
-# Make sleep file descriptor to named pipe and redirect input
-if mksleepfd; then
-    jobs="$jobs$! "
-    sleepfd_redirect_stdin
-fi
-
-# Proxy stdandard output and error using named pipe to allow
-# daemon to write to them after switching user (e.g. using gosu)
-if [ -n "${proxy_stdio#\@proxy_stdio\@}" ]; then
-    readonly \
-        stdout="/dev/stdout.$name" \
-        stderr="/dev/stderr.$name" \
+# Usage: main <exe> ...
+main()
+{
+    local \
+        user='@user@' \
+        name='@name@' \
+        pidfile='/run/@name@/@named@.pid' \
+        proxy_stdio='@proxy_stdio@' \
+        proxy_syslog='@proxy_syslog@' \
+        timeout=10 \
         #
 
-    # Remove original symlinks
-    rm -f "$stdout" "$stderr"
+    # Turn on job control to put each job into separage process group
+    set -m
 
-    # Create named pipes group owned by user
-    mkfifo -m 0660 "$stdout" "$stderr"
-    chown ":$user" "$stdout" "$stderr"
+    # Setup signal handlers early
+    trap 'sig_handler TERM' TERM
+    trap 'sig_handler INT' INT
+    trap 'sig_handler QUIT' QUIT
+    trap 'sig_handler HUP' HUP
+    trap 'sig_handler USR1' USR1
+    trap 'sig_handler USR2' USR2
+    trap 'sig_handler CHLD' CHLD
 
-    # Spawn cat(1) as input/output proxy
-    cat "$stdout" &
-    jobs="$jobs$! "
-    cat "$stderr" >&2 &
-    jobs="$jobs$! "
-
-    {
-        # This would block until cat(1) opens for reading.
-        exec >"$stdout" 2>"$stderr"
-        # This would block indefinitely to keep $stdout and $stderr
-        # open in this subshell preventing cat(1) readers from EOF.
-        sleepx inf
-    } &
-    jobs="$jobs$! "
-fi
-
-# Proxy syslog to either standard error or output file descriptor that
-# either inherited or point to named pipe when proxifying standard I/O.
-if [ -n "${proxy_syslog#\@proxy_syslog\@}" ]; then
-    readonly \
-        syslog="$proxy_syslog" \
+    # Used by sig_handler()
+    local \
+        pid='' \
+        jobs='' \
+        oneshot='' \
         #
 
-    syslog_cat__strip_pri='1' \
-        syslog_cat "$syslog" &
-    jobs="$jobs$! "
-fi
-
-# Remove stale pid file, if any
-rm -f "$pidfile" ||:
-
-# Run through SysV init script
-{
-    eval "${stdout+exec  >'$stdout'}"
-    eval "${stderr+exec 2>'$stderr'}"
-
-    exec /etc/init.d/$name start
-} &
-pid=''
-oneshot="$!"
-
-# Wait for pid file
-
-# Usage: cb ...
-cb()
-{
-    local pidval
-    if [ -s "$pidfile" ] && read -r pidval _ <"$pidfile" &&
-       [ "$pidval" -gt 0 ] 2>/dev/null && kill -0 "$pidval" 2>/dev/null
-    then
-        pid="$pidval"
-        return 1
+    # Make sleep file descriptor to named pipe and redirect input
+    if mksleepfd; then
+        jobs="$jobs$! "
+        sleepfd_redirect_stdin
     fi
-}
-sleepx $timeout cb
 
-# Watch for main process
-if [ -n "$pid" ]; then
-    while kill -0 $pid; do
-        sleepx $timeout
-    done
+    # Proxy stdandard output and error using named pipe to allow
+    # daemon to write to them after switching user (e.g. using gosu)
+    if [ -n "${proxy_stdio#\@proxy_stdio\@}" ]; then
+        local \
+            stdout="/dev/stdout.$name" \
+            stderr="/dev/stderr.$name" \
+            #
+
+        # Remove original symlinks
+        rm -f "$stdout" "$stderr"
+
+        # Create named pipes group owned by user
+        mkfifo -m 0660 "$stdout" "$stderr"
+        chown ":$user" "$stdout" "$stderr"
+
+        # Spawn cat(1) as input/output proxy
+        cat "$stdout" &
+        jobs="$jobs$! "
+        cat "$stderr" >&2 &
+        jobs="$jobs$! "
+
+        # Above readers will be blocked in open(2) until first writer (i.e.
+        # file descriptor that opens named pipe in write-only or read/write
+        # mode) comes.
+    else
+        local stdout='' stderr=''
+    fi
+
+    # Proxy syslog to either standard error or output file descriptor that
+    # either inherited or point to named pipe when proxifying standard I/O.
+    if [ -n "${proxy_syslog#\@proxy_syslog\@}" ]; then
+        local \
+            syslog="$proxy_syslog" \
+            #
+
+        # Usage: syslogd
+        syslogd()
+        {
+            local syslog_cat__strip_pri='1'
+            syslog_cat "$syslog"
+        }
+
+        syslogd &
+        jobs="$jobs$! "
+    else
+        local syslog=''
+    fi
+
+    ## Remove stale pid file, if any
+
+    rm -f "$pidfile" ||:
+
+    ## Run application
+
+    # Usage: run <exe> ...
+    run()
+    {
+        local exe="${1:?missing 1st arg to run() <exe>}"
+        shift
+
+        "$exe" "$@" ||:
+
+        # This would block indefinitely to keep $stdout and $stderr
+        # open in this subshell preventing cat(1) readers from exit.
+        sleepx inf
+    }
+
+    # Usage: start <exe> ...
+    start()
+    {
+       run "$@" &
+       jobs="$jobs$! "
+    }
+
+    if [ -n "${stdout-}" ]; then
+       # Below output and error redirects affects only this `if' statement. On
+       # return from function it will be restored to callers one.
+       #
+       # This will wake up cat(1) readers, started by $proxy_stdio, right after
+       # both input and output file descriptors opened in write-only mode.
+
+        if :; then
+            start "$@"
+        fi >"$stdout" 2>"$stderr"
+    else
+        start "$@"
+    fi
+
+    ## Wait for pid file
+
+    # Usage: cb ...
+    cb()
+    {
+        local pidval
+        if [ -s "$pidfile" ] && read -r pidval _ <"$pidfile" &&
+           [ "$pidval" -gt 0 ] 2>/dev/null && kill -0 "$pidval" 2>/dev/null
+        then
+            pid="$pidval"
+            return 1
+        fi
+    }
+    sleepx $timeout cb
+
+    ## Watch for main process
+
+    if [ -n "$pid" ]; then
+        while kill -0 $pid; do
+            sleepx $timeout
+        done
+    fi
+
+    ## Exit by sending TERM signal to self
+
+    # Usage: cb ...
+    cb()
+    {
+        kill -TERM "$1" || return
+    }
+    sleepx $timeout cb $$
+
+    # Last restort
+    sig_handler_exit 125
+}
+
+if [ -n "${HIDE_ARGS+yes}" ]; then
+    if :; then
+        # Close write-only file descriptor right after file it
+        # refers to was opened read-only as standard input for
+        # this `if' statement
+        exec 4>&-
+
+        arg=''
+        while IFS='' read -r arg; do
+            set -- "$@" "${arg-}"
+        done
+        unset -v arg
+
+        # Below will open file descriptor reference
+        # as regular file in read-only mode at pos 0
+    fi </dev/fd/4
+
+    # Do not export to external commands
+    # (but still to subshells)
+    unset -v HIDE_ARGS
+
+    main "$@"
+else
+    t="/tmp/.${0##*/}.$$"
+    exec 4>"$t"
+    rm -f "$t" || exit 125
+
+    # Write arguments to file
+    while [ $# -gt 0 ]; do
+        printf -- '%s\n' "$1"
+        shift
+    done >&4
+
+    HIDE_ARGS='yes' exec "$0"
 fi
-
-# Exit by sending TERM signal to self
-
-# Usage: cb ...
-cb()
-{
-    kill -TERM "$1" || return
-}
-sleepx $timeout cb $$
-
-# Last restort
-sig_handler_exit 125

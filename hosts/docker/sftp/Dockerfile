@@ -112,4 +112,5 @@ RUN sed -e "s,@user@,root,g" \
 
 ## Make container executable
 
+CMD [ "/etc/init.d/ssh", "start" ]
 ENTRYPOINT [ "/docker-entrypoint.sh" ]
