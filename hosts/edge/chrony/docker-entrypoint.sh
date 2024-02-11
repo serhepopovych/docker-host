@@ -3,6 +3,21 @@
 # Requires: nc.openbsd(1), gawk(1), chroot(1), sleep(1), mkfifo(1), cat(1)
 #           chown(1), rm(1)
 
+# Usage: assert_m
+assert_m()
+{
+    # Assert if job control isn't enabled which is default when non-interactive
+    # since background jobs aren't on separate process groups and cannot be
+    # terminated without also terminating this script interpreter process.
+    case "$-" in
+        *m*)
+            ;;
+        *)
+            : "${m:?job control is OFF}"
+            ;;
+    esac
+}
+
 # Usage: mksleepfd
 mksleepfd()
 {
@@ -11,60 +26,101 @@ mksleepfd()
         if kill -0 "${sleepjob-}" 2>/dev/null; then
             return 0
         else
-            unset -v sleepjob sleepfl
+            unset -v sleepjob
             return 1
         fi
     fi
 
     # Not using more secure mktemp(1) to avoid
     # external dependency on it
-    local fl="/tmp/.mksleepfd.$$"
+    local fl="/tmp/.sleepfd.$$"
 
     # Use restrictive permissions to minimize race
     mkfifo -m 0600 "$fl" || return
 
-    # This will sleep in read(2). Opening named pipe only for reading
-    # or writing would block until opened in opposide direction.
-    #
-    # Furthermore file descriptors opened only for reading would
-    # receive EOF when last write file descriptor being closed.
-    #
-    # Thus open as read and write. Writes to this file descriptor
-    # would be consumed making it to behave like /dev/null without
-    # any impact on $sleepjob.
+    # Usage: sleepfd_redirect_stdin
+    sleepfd_redirect_stdin()
+    {
+        # Make sure $sleepjob is a valid number, no /, .. and . allowed
 
-    while IFS=''; do
-        # interruptible by signals
-        read _ ||:
-    done <>"$fl" &
+        local sleepjob="${sleepjob-}"
+        sleepjob="${sleepjob##*[!0-9]*}"
+        # Fallback to current process
+        sleepjob="${sleepjob:-self}"
 
-    sleepjob="$!"
+        # Note that on Linux /proc/$sleepjob/fd/0 points to deleted fifo
+        # making possible for third-party processes with rights
+        # to open it for read and/or write:
+        #
+        #     $ readlink /proc/$sleepjob/fd/0
+        #     /tmp/.sleepfd.$$ (deleted)
 
-    # Wait for job to come up with open fd. Linux specific
-    sleepfl="/proc/$sleepjob/fd/0"
+        local sleepfl="/proc/$sleepjob/fd/0"
 
-    while kill -0 "$sleepjob" &&
-        [ ! "$sleepfl" -ef "$fl" ]
-    do
-        # No means to sleep here reliably/safely: busy loop
-        echo >"$fl"
-    done
+        # It must be named pipe
+        [ -p "$sleepfl" ] || return
 
-    # Remove from filesystem to make sure no one writes to
-    # it, wakes read(1) and causes us to exit.
-    #
-    # Note that on Linux /proc/$!/fd/0 points to deleted fifo
-    # making possible for third-party processes with rights
-    # to open it for read and/or write:
-    #
-    #     $ readlink /proc/$!/fd/0
-    #     /tmp/.mksleepfd.$$ (deleted)
-    #
-    # Do not treat as fatal error in case of unlink(2) error.
-    rm -f "$fl" ||:
+        # Do not reopen as current one might be opened in read/write mode.
+        [ ! "$sleepfl" -ef "/proc/self/fd/0" ] || return 0
 
-    # Make sure $sleepjob is running or cleanup everything
-    mksleepfd || return
+        exec <"$sleepfl" || return
+    }
+
+    # Usage: sleepfd
+    sleepfd()
+    {
+        if sleepfd_redirect_stdin; then
+            local _
+            while IFS=''; do
+                # Consume all read(1) data from named pipe ignoring errors,
+                # if any; interruptible by signals.
+                read -r _ 2>/dev/null || [ $? -gt 128 ] || break
+            done
+        else
+            local sfd=''
+            : "${sfd:?no file descriptor to sleep on, mksleepfd() first}"
+        fi
+
+        # If reached, exit with 128 + SIGPIPE to make it
+        # look like read(1) from broken file descriptor.
+        exit 141
+    }
+
+    # Usage: rmfifo <fl>
+    rmfifo()
+    {
+        # File descriptor opened, can try to remove entry
+        # from filesystem with unlink(2) ignoring errors.
+
+        local fl="${1-}"
+        [ ! -p "$fl" ] || rm -f "$fl" ||:
+    }
+
+    if rmfifo "$fl" && [ -n "${sleepjob-&}" ]; then
+        # Not polluting callers namespace
+        unset -f rmfifo
+
+        # Job control required
+        assert_m
+
+        # File descriptors, especially standard input, inherited
+        # by child job running sleepfd(), but it will open named
+        # pipe through reference in our /proc/$$/fd/0 due to
+        # sanity checks against $sleepjob performed by sleepfd().
+
+        sleepfd &
+        sleepjob="$!"
+
+        # Make sure $sleepjob is running or cleanup everything
+        mksleepfd || return
+    else
+        # Will block here. Could be used in infinite sleep
+        # implementation that should set $sleepjob to empty.
+        sleepfd
+    fi <>"$fl"
+
+    # Above standard input redirect affects only `if' statement. On
+    # return from function it will be restored to callers one.
 }
 
 # Usage: uptimex <var>
@@ -93,38 +149,17 @@ sleepx()
     # Usage: sleep_inf
     sleep_inf()
     {
-        if [ -n "${sleepjob-}" ]; then
-            # Is there $sleepjob running?
+        # Do loop in case of $sleepjob isn't running:
+        # first mksleepfd() would unset it and next
+        # would establish internal pipe and block.
+
+        while :; do
+            local sleepjob="${sleepjob-}"
+
             if mksleepfd; then
-                local _
-                while IFS=''; do
-                    # interruptible by signals
-                    read _ ||:
-                done <"$sleepfl"
+                sleepfd
             fi
-        fi
-
-        if [ -z "${sleepjob-}" ]; then
-            # Stripped down version of mksleepfd()
-            local fl="/tmp/.sleep_inf.$$"
-
-            mkfifo -m 0600 "$fl" || return
-            {
-                # File descriptor opened, can try to remove
-                # filesystem entry with unlink(2)
-                rm -f "$fl" ||:
-
-                local _
-                while IFS=''; do
-                    # interruptible by signals
-                    read _ ||:
-                done
-            } <>"$fl"
-        fi
-
-        # If reached, exit with 128 + SIGPIPE to indicate
-        # that read(1) from broken file descriptor
-        exit 141
+        done
     }
 
     # Usage: sleep_num <secs> [<cb> [<args>...]]
@@ -171,6 +206,9 @@ sleepx()
                     # fallback to sleep(1) due to errors or data being read(1)
                     in_bash=''
                 else
+                    # Job control required
+                    assert_m
+
                     # This spawns new process in this script interpreter
                     # process group. Obviously this is suboptimal solution
                     # as there might be a race with kill(1) that would end
@@ -379,16 +417,8 @@ sig_handler()
         jobs="${jobs# }" && jobs="${jobs:+ $jobs}"
     }
 
-    # Assert if job control isn't enabled which is default when non-interactive
-    # since background jobs aren't on separate process groups and cannot be
-    # terminated without also terminating this script interpreter process.
-    case "$-" in
-        *m*)
-            ;;
-        *)
-            sig_handler__fatal 121 'job control is OFF'
-            ;;
-    esac
+    # Job control required
+    assert_m
 
     case "$signal" in
         'EXIT')
@@ -562,7 +592,7 @@ jobs=''
 # Make sleep file descriptor to named pipe and redirect input
 if mksleepfd; then
     jobs="$jobs$! "
-    exec <"$sleepfl"
+    sleepfd_redirect_stdin
 fi
 
 # Proxy stdandard output and error using named pipe to allow
