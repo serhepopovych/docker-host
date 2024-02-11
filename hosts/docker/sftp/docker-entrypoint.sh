@@ -610,6 +610,7 @@ rm -f "$pidfile" ||:
 
     exec /etc/init.d/$name start
 } &
+pid=''
 oneshot="$!"
 
 # Wait for pid file
@@ -617,12 +618,12 @@ oneshot="$!"
 # Usage: cb ...
 cb()
 {
-    if [ -s "$pidfile" ] && read -r pid _ <"$pidfile" &&
-       [ "$pid" -gt 0 ] 2>/dev/null
+    local pidval
+    if [ -s "$pidfile" ] && read -r pidval _ <"$pidfile" &&
+       [ "$pidval" -gt 0 ] 2>/dev/null && kill -0 "$pidval" 2>/dev/null
     then
+        pid="$pidval"
         return 1
-    else
-        pid=''
     fi
 }
 sleepx $timeout cb
