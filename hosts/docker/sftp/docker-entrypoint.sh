@@ -3,6 +3,21 @@
 # Requires: nc.openbsd(1), gawk(1), chroot(1), sleep(1), mkfifo(1), cat(1)
 #           chown(1), rm(1)
 
+# Usage: assert_m
+assert_m()
+{
+    # Assert if job control isn't enabled which is default when non-interactive
+    # since background jobs aren't on separate process groups and cannot be
+    # terminated without also terminating this script interpreter process.
+    case "$-" in
+        *m*)
+            ;;
+        *)
+            : "${m:?job control is OFF}"
+            ;;
+    esac
+}
+
 # Usage: mksleepfd
 mksleepfd()
 {
@@ -84,6 +99,9 @@ mksleepfd()
     if rmfifo "$fl" && [ -n "${sleepjob-&}" ]; then
         # Not polluting callers namespace
         unset -f rmfifo
+
+        # Job control required
+        assert_m
 
         # File descriptors, especially standard input, inherited
         # by child job running sleepfd(), but it will open named
@@ -188,6 +206,9 @@ sleepx()
                     # fallback to sleep(1) due to errors or data being read(1)
                     in_bash=''
                 else
+                    # Job control required
+                    assert_m
+
                     # This spawns new process in this script interpreter
                     # process group. Obviously this is suboptimal solution
                     # as there might be a race with kill(1) that would end
@@ -396,16 +417,8 @@ sig_handler()
         jobs="${jobs# }" && jobs="${jobs:+ $jobs}"
     }
 
-    # Assert if job control isn't enabled which is default when non-interactive
-    # since background jobs aren't on separate process groups and cannot be
-    # terminated without also terminating this script interpreter process.
-    case "$-" in
-        *m*)
-            ;;
-        *)
-            sig_handler__fatal 121 'job control is OFF'
-            ;;
-    esac
+    # Job control required
+    assert_m
 
     case "$signal" in
         'EXIT')
