@@ -41,7 +41,8 @@ RUN K=/etc/apt/keyrings && H=https://deb.nodesource.com \
  && echo "deb [signed-by=$K/nodesource.gpg] $H/node_$NODE_MAJOR.x nodistro main" | \
     tee /etc/apt/sources.list.d/nodesource.list \
  && apt-get -qq update \
- && apt-get -qq install nodejs
+ && apt-get -qq install nodejs \
+ && apt-get -qq install procps
 
 RUN npm install pm2 -g
 RUN pm2 install pm2-logrotate && pm2 kill
