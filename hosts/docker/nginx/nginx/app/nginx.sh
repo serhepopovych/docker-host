@@ -646,10 +646,10 @@ rm -f "$pidfile" ||:
     eval "${stdout+exec  >'$stdout'}"
     eval "${stderr+exec 2>'$stderr'}"
 
-    exec /usr/sbin/$name "$@"
+    exec /docker-entrypoint.ngx nginx "$@"
 } &
-pid="$!"
-oneshot=''
+pid=''
+oneshot="$!"
 
 # Wait for pid file
 

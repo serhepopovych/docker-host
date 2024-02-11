@@ -117,6 +117,8 @@ RUN sed -e "s,@user@,nginx,g" \
 
 ## Install docker-entrypoint.sh and ecosystem.config.js.templ
 
+RUN mv -f /docker-entrypoint.sh /docker-entrypoint.ngx
+
 COPY docker-entrypoint.sh /
 
 WORKDIR /root
