@@ -464,6 +464,11 @@ sig_handler()
                 return 0
             fi
             ;;
+        'USR2')
+            printf >&2 'Jobs running by %u pid\n' "$$"
+            jobs -l >&2
+            return 0
+            ;;
     esac
 
     case "$signal" in
@@ -559,7 +564,7 @@ sig_handler()
                 fi
             done
             ;;
-        'HUP'|'INT'|'USR1'|'USR2')
+        'HUP'|'INT'|'USR1')
             # Send signal to main job process
             kill -$signal $pid 2>/dev/null ||:
             ;;
@@ -571,9 +576,12 @@ sig_handler()
 
 ################################################################################
 
-# Usage: main <exe> ...
+# Usage: main <argv0> <exe> ...
 main()
 {
+    local prog_name="${0##*/}"
+    shift
+
     local \
         user='@user@' \
         name='@name@' \
@@ -698,6 +706,8 @@ main()
 
     ## Main loop
 
+    printf >&2 '%s: running as %u pid\n' "$prog_name" "$$"
+
     # Usage: cb ...
     cb()
     {
@@ -739,7 +749,7 @@ if [ -n "${HIDE_ARGS+yes}" ]; then
     # (but still to subshells)
     unset -v HIDE_ARGS
 
-    main "$@"
+    main "$0" "$@"
 else
     t="/tmp/.${0##*/}.$$"
     exec 4>"$t"
