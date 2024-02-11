@@ -38,4 +38,4 @@ guacamole_ldap_servers_yml()
 }
 guacamole_ldap_servers_yml
 
-exec /opt/guacamole/bin/start.sh "$@"
+exec "$@"

@@ -17,5 +17,5 @@ RUN sed -e "s,@ldap_network_timeout@,$LDAP_NETWORK_TIMEOUT,g" \
 
 USER guacamole
 
-CMD []
+CMD [ "/opt/guacamole/bin/start.sh" ]
 ENTRYPOINT [ "/docker-entrypoint.sh" ]
