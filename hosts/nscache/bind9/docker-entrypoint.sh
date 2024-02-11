@@ -41,77 +41,88 @@ getpid()
     fi
 }
 
-# Usage: mksleepfd
-mksleepfd()
+# Usage: waitx <job> [<signal>]
+waitx()
 {
-    local pid
-    getpid pid
+    local job="${1:?missing 1st arg to waitx() <job>}"
+    local signal="${2:-CONT}"
+    local rc
 
-    # If running in job or subshell: can't use wait(1) on $sleepjob which is
-    # needed to implement interruptible by signals infinite sleep (blocking)
+    # Signal handlers would interrupt wait(1) and run in it's caller context
+    # (i.e. waitx() and it's callers) at least on dash(1).
+    #
+    # Make sure to NOT share local variable names that clash with globally used
+    # by sig_handler() in waitx() and it's callers up to global level.
+    #
+    # Note that signal handler would see all local variables defined above and
+    # by waitx(). Local may override global ones (e.g. local pid; getpid pid;
+    # would override global pid=).
 
-    eval "sleepjob=\"\${sleepjob_$pid-}\""
+    until rc=0 && wait "$job"; do
+        # wait(1) could be interrupted by signals received by interpreter that
+        # further may decide that signal ignored by the script (e.g.
+        # trap '' TERM); interrupted wait(1) will return 128 + <signo> status
 
-    if [ -n "$sleepjob" ]; then
-        if kill -0 "$sleepjob" 2>/dev/null; then
-            return 0
+        # Process
+        #   1) terminated before we kill(1) it: wait(1) has return code
+        #   2) terminated normally           : rc <= 128
+        #   3) terminated by signal          : rc = 128 + <signo> (x)
+        #   4) wait(1) interrupted by signal : rc = 128 + <signo> (x)
+        #   5) isn't our child process/job   : rc = 127
+
+        rc=$?
+        if [ $rc -le 128 ]; then
+            # not a 128 + <signo>: exited
+            break
+        elif kill -$signal "$job" 2>/dev/null; then
+            # interrupted by signal
+            continue
         else
-            unset -v sleepjob
-            return 1
+            # not running, exit status >128
+            break
         fi
-    fi
+    done
 
-    # Usage: sleepfd_redirect_stdin
-    sleepfd_redirect_stdin()
-    {
-        # Make sure $sleepjob is a valid number, no /, .. and . allowed
+    return $rc
+}
 
-        local sleepjob="${sleepjob-}"
-        sleepjob="${sleepjob##*[!0-9]*}"
-        # Fallback to current process
-        sleepjob="${sleepjob:-self}"
-
-        # Note that on Linux /proc/$sleepjob/fd/0 points to deleted fifo
-        # making possible for third-party processes with rights
-        # to open it for read and/or write:
-        #
-        #     $ readlink /proc/$sleepjob/fd/0
-        #     /tmp/.sleepfd.$pid (deleted)
-
-        local sleepfl="/proc/$sleepjob/fd/0"
-
-        # It must be named pipe
-        [ -p "$sleepfl" ] || return
-
-        # Do not reopen as current one might be opened in read/write mode.
-        [ ! "$sleepfl" -ef "/proc/self/fd/0" ] || return 0
-
-        exec <"$sleepfl" || return
-    }
-
+# Usage: pausefd
+pausefd()
+{
     # Usage: sleepfd
     sleepfd()
     {
-        if sleepfd_redirect_stdin; then
-            local _
-            while IFS=''; do
-                # Consume all read(1) data from named pipe ignoring errors,
-                # if any; NOT interruptible by signals (i.e. trap ... not run)
-                read -r _ 2>/dev/null || [ $? -gt 128 ] || break
+        unset -f sleepfd
+
+        local _
+        while IFS=''; do
+            # Consume all read(1) data from named pipe ignoring errors,
+            # if any; NOT interruptible by signals (i.e. trap ... not run)
+            read -r _ 2>/dev/null || [ $? -gt 128 ] || break
+        done
+
+        # Stop subshell/job only, until SIGCONT or SIGKILL. Stopping
+        # $$ will also stop any signal processing by it.
+
+        local p
+        getpid p
+
+        if [ "$p" -ne "$$" ]; then
+            # To stop/kill send TERM followed by CONT to $pid
+            while kill -STOP "$p"; do
+                :
             done
-        else
-            local sfd=''
-            : "${sfd:?no file descriptor to sleep on, mksleepfd() first}"
         fi
 
-        # If reached, exit with 128 + SIGPIPE to make it
-        # look like read(1) from broken file descriptor.
-        exit 141
+        # If reached, exit with ENXIO, No such device or address
+        exit 6
     }
 
     # Usage: rmfifo <fl>
     rmfifo()
     {
+        unset -f rmfifo
+
         # File descriptor opened, can try to remove entry
         # from filesystem with unlink(2) ignoring errors.
 
@@ -119,31 +130,62 @@ mksleepfd()
         [ ! -p "$fl" ] || rm -f "$fl" ||:
     }
 
-    # Job control required
-    assert_m 'mksleepfd'
+    local p
+    getpid p
 
     # Not using more secure mktemp(1) to avoid
     # external dependency on it
-    local fl="/tmp/.sleepfd.$pid"
+    local fl="/tmp/.sleepfd.$p"
 
     # Use restrictive permissions to minimize race
     mkfifo -m 0600 "$fl" || return
 
-    sleepfd <>"$fl" &
-    eval "sleepjob_$pid=\"\$!\""
+    if [ -n "${pausefd__stop-}" ]; then
+        ## Uninterruptible by signals, never returns
 
-    if rmfifo "$fl"; then
-        # Not polluting callers namespace
-        unset -f rmfifo
+        # See fifo(7) for read/write mode description
+        if rmfifo "$fl"; then
+            sleepfd
+        fi <>"$fl"
 
-        # Make sure $sleepjob is running or cleanup everything
-        mksleepfd || return
+        # Never reached
+        exit
+    else
+        ## Interruptible by signals
 
-        # Below standard input redirect affects only `if' statement on
-        # return from which it will be restored to the original one.
-        #
-        # It will block in open(2) until sleepfd() opens in read/write.
-    fi <"$fl"
+        # Job control required
+        assert_m 'pausefd'
+
+        # See fifo(7) for read/write mode description
+        sleepfd <>"$fl" &
+        local sleepjob="$!"
+
+        sh_oneshot_add "$sleepjob"
+
+        # Block in open(2) until sleepfd() opens in read/write
+        rmfifo "$fl" <"$fl"
+
+        local rc=0
+        waitx "$sleepjob" || rc=$?
+
+        sh_oneshot_del "$sleepjob"
+
+        return $rc
+    fi
+}
+
+# Usage: pausex
+pausex()
+{
+    local pausefd__stop=''
+    pausefd || return
+}
+
+# Usage: stopx
+stopx()
+{
+    local pausefd__stop='noreturn'
+    pausefd
 }
 
 # Usage: uptimex <var>
@@ -172,20 +214,7 @@ sleepx()
     # Usage: sleep_inf
     sleep_inf()
     {
-        while mksleepfd; do
-            if wait "$sleepjob" 2>/dev/null; then
-                # It is not expected that $sleepjob terminates,
-                # especially with exit status 0
-                break
-            else
-                # interrupted by signal?
-                local rc=$?
-                [ $rc -gt 128 ] || exit $rc
-            fi
-        done
-
-        # Use same code as sleepfd()
-        exit 141
+        pausex ||:
     }
 
     # Usage: sleep_num <secs> [<cb> [<args>...]]
@@ -203,9 +232,8 @@ sleepx()
             cb=':'
         fi
 
-        local now t rc job
+        local now t job
 
-        local space="${oneshot:+ }"
         while "$cb" "$@"; do
             [ $((secs -= nr)) -ge 0 ] || break
 
@@ -220,13 +248,9 @@ sleepx()
                 sleep $t &
                 job="$!"
 
-                oneshot="${oneshot-}$space$job "
-                while kill -0 "$job" 2>/dev/null; do
-                    # interruptible by signals
-                    wait "$job" || [ $? -le 128 ] || continue
-                    break
-                done
-                oneshot="${oneshot%$space$job }"
+                sh_oneshot_add "$job"
+                waitx "$job" ||:
+                sh_oneshot_del "$job"
             done
         done
     }
@@ -449,14 +473,13 @@ sig_handler()
     case "$signal" in
         'CHLD')
             # Make sure main process and jobs it depend on is running,
-            # resuming in case they was suspend. Note that this signal
+            # resuming in case they was stopped. Note that this signal
             # triggered for any child process, including external tools
             # and subshells, spawned by this script, so this might be
             # quite hotpoint even in case all code does is sleepx().
             #
-            # Thus it is suggested to not to run any external tools or
-            # subshells while waiting for main process, especially in
-            # sleepx() helper that should not spawn processes at all.
+            # Run through $pid and $jobs and resume all of them to ensure
+            # they receive SIGTERM while running, instead of pending it.
             local p
             for p in $pid $jobs ''; do
                 kill -CONT $p 2>/dev/null || break
@@ -481,35 +504,49 @@ sig_handler()
             # No reentrance
             trap '' 'TERM' 'QUIT' 'CHLD' 'EXIT'
 
-            # Send only $signal to the main job process: process group, if any,
-            # would be terminated in the same way as supplementary $jobs.
-            local prev_rc rc=256
+            local tries=3
+
+            # Send $signal to the main process first, then try SIGTERM unless
+            # $signal wasn't it initially. Otherwise terminate it in the same
+            # way as supplementary $jobs.
+            local rc=127 running
             while [ -n "$pid" ]; do
-                # Main job process
-                #   1) terminated before we kill(1) it: wait(1) has return code
-                #   2) terminated normally           : rc <= 128
-                #   3) terminated by signal          : rc = 128 + <signo> (x)
-                #   4) wait(1) interrupted by signal : rc = 128 + <signo> (x)
-                #   5) isn't our child process/job   : rc = 127
-                kill -$signal $pid 2>/dev/null || [ $rc -ge 256 ] || break
+                running=''
+                if kill -CONT $pid; then
+                    # Process resumed, send signal
+                    if kill -$signal $pid; then
+                        running='yes'
+                    fi
+                fi 2>/dev/null
 
-                # Signal was sent, but child isn't our process/job and
-                # cannot track it's status with wait(1), give some time
-                # to main process to handle signal and exit.
-                if [ $rc -eq 127 ]; then
-                    sleepx 1
-                    continue
+                # Do wait(1) if $pid is our child, resending signal
+                waitx $pid $signal && rc=0 || rc=$?
+
+                if [ $rc -ne 127 ]; then
+                    # Valid return code, not running.
+                    break
+                else
+                    [ -n "$running" ] || break
+
+                    # Signal was sent, but child isn't our process/job and
+                    # thus we can't track it's status with wait(1). Give it
+                    # some time to handle signal and then retry.
+                    if [ $((tries -= 1)) -gt 0 ]; then
+                        sleepx 1
+                    else
+                        case "$signal" in
+                            'TERM')
+                                  # Still running, process like $jobs
+                                  rc=127
+                                  break
+                                  ;;
+                            *)
+                                  signal='TERM'
+                                  ;;
+                        esac
+                        tries=3
+                    fi
                 fi
-
-                # wait(1) could be interrupted by signals received by
-                # interpreter that further may decide that signal
-                # ignored by the script (e.g. trap '' TERM);
-                # interrupted wait(1) will return 128 + <signo> status
-                while [ $rc -gt 128 ]; do
-                    prev_rc=$rc
-                    wait $pid && rc=0 || rc=$?
-                    [ $rc -ne $prev_rc ] || break
-                done
             done
             sig_handler__jobs '' $jobs $oneshot
 
@@ -522,10 +559,7 @@ sig_handler()
                 pgrp="${jobs# }"
                 pgrp="${pgrp%% *}"
                 pgrp="${pgrp:+-$pgrp}"
-                rc=123
             fi
-
-            local tries
 
             signal='TERM'
             tries=5
@@ -533,6 +567,9 @@ sig_handler()
             while :; do
                 # Before sending signal
                 sig_handler__hook $signal $jobs ||:
+
+                # Resume processes before sending signal
+                kill -CONT $jobs 2>/dev/null ||:
 
                 # We would send signals to process group lead first to give
                 # it time to react and end it's child processes.
@@ -579,6 +616,34 @@ sig_handler()
     esac
 }
 
+# Usage: sh_oneshot_add <job>
+sh_oneshot_add()
+{
+    local job="${1:?missing 1st arg to sh_oneshot_add() <job>}"
+
+    if [ -n "${oneshot+x}" ]; then
+        if [ -n "${oneshot##* $job *}" ]; then
+            # Make visible to signal handler
+            oneshot="${oneshot% } $job "
+        fi
+    fi
+}
+
+# Usage: sh_oneshot_del()
+sh_oneshot_del()
+{
+    local job="${1:?missing 1st arg to sh_oneshot_del() <job>}"
+
+    if [ -n "${oneshot+x}" ]; then
+        if [ -z "${oneshot##* $job *}" ]; then
+            # Hide from signal handler
+            local t="${oneshot%% $job *}"
+            oneshot="$t ${oneshot##* $job }"
+            oneshot="${oneshot% }"
+        fi
+    fi
+}
+
 ################################################################################
 
 # Usage: main <argv0> <exe> ...
@@ -614,12 +679,6 @@ main()
         jobs='' \
         oneshot='' \
         #
-
-    # Make sleep file descriptor to named pipe and redirect input
-    if mksleepfd; then
-        jobs="$jobs$sleepjob "
-        sleepfd_redirect_stdin
-    fi
 
     # Proxy stdandard output and error using named pipe to allow
     # daemon to write to them after switching user (e.g. using gosu)
@@ -683,24 +742,25 @@ main()
 
         "$exe" "$@" ||:
 
-        # This would block indefinitely to keep $stdout and $stderr
-        # open in this subshell, preventing cat(1) readers from exit.
-        sleepfd
+        # This would sleep uninterruptible to keep $stdout and $stderr
+        # open in this subshell/job preventing cat(1) readers from exit.
+        stopx
     }
 
     # Usage: start <exe> ...
     start()
     {
        run "$@" &
-       jobs="$jobs$! "
+       runjob="$!"
     }
+    local runjob=''
 
     if [ -n "${stdout-}" ]; then
-       # Below output and error redirects affects only this `if' statement:
-       # on return from which they will be restored to the original ones.
-       #
-       # This will wake up cat(1) readers, started by $proxy_stdio, right after
-       # both input and output file descriptors opened in write-only mode.
+        # Below output and error redirects affects only this `if' statement,
+        # on return from which they will be restored to the original ones.
+        #
+        # This will wake up cat(1) readers, started by $proxy_stdio, right after
+        # both input and output file descriptors opened in write-only mode.
 
         if :; then
             start "$@"
@@ -708,6 +768,7 @@ main()
     else
         start "$@"
     fi
+    jobs="$jobs$runjob "
 
     ## Main loop
 
@@ -718,19 +779,32 @@ main()
     {
         local pidval
         if [ -s "$pidfile" ] && read -r pidval _ <"$pidfile" &&
-           [ "$pidval" -gt 0 ] 2>/dev/null && kill -0 "$pidval" 2>/dev/null
+           [ "$pidval" -gt 0 ] && kill -0 "$pidval"
         then
             pid="$pidval"
             return 1
-        fi
+        fi 2>/dev/null
     }
     sleepx $timeout cb
 
     if [ -n "$pid" ]; then
-        sleepx inf
-    else
-        sig_handler 'TERM'
+        waitx "$runjob" ||:
     fi
+
+    ## Exit
+
+    # Raise signal instead of calling "sig_handler 'TERM'"
+    # as it could be intterupted with signal in the middle.
+
+    # Usage: cb ...
+    cb()
+    {
+        kill -TERM "$1" || return
+    }
+    sleepx $timeout cb $$
+
+    # Last restort
+    sig_handler_exit 125
 }
 
 if [ -n "${HIDE_ARGS+yes}" ]; then
