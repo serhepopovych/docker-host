@@ -122,9 +122,16 @@ syslog_cat()
         # spawned in subshell which is substituded with exec(1):
         # due to code being enclosed into {} group to make it more readable
 
-        exec chroot --userspec='nobody:nogroup' / gawk -v RS='<[0-9]{1,3}>' \
-            '{ if ($0 !~ "^\\s*$") { print PRI$0; }; PRI=RT; }' \
-            >&${syslog_cat__fd:-2} 2>/dev/null
+        local prog
+        if [ -n "${syslog_cat__strip_pri+x}" ]; then
+            prog='{ if ($0 !~ "^\\s*$") { print $0; }; }'
+        else
+            prog='{ if ($0 !~ "^\\s*$") { print PRI$0; }; PRI=RT; }'
+        fi
+
+        exec chroot --userspec='nobody:nogroup' / \
+             gawk -v RS='<[0-9]{1,3}>' "$prog" \
+             >&${syslog_cat__fd:-2} 2>/dev/null
     } || return
 }
 
@@ -387,7 +394,8 @@ if [ -n "${proxy_syslog#\@proxy_syslog\@}" ]; then
         syslog="$proxy_syslog" \
         #
 
-    syslog_cat "$syslog" &
+    syslog_cat__strip_pri='1' \
+        syslog_cat "$syslog" &
     jobs="$jobs $!"
 fi
 
