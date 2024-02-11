@@ -26,7 +26,7 @@ RUN for timezone in "$timezone" 'US/Eastern' 'Etc/UTC'; do \
 
 ## Install nodejs & pm2
 
-ARG NODE_MAJOR=18
+ARG NODE_MAJOR=20
 
 RUN K=/etc/apt/keyrings && H=https://deb.nodesource.com \
  && install -d  "$K" \
