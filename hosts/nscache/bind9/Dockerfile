@@ -63,6 +63,7 @@ RUN sed -e "s,@user@,bind,g" \
         -e "s,@name@,named,g" \
         -e "s,@named@,named,g" \
         -e "s,@proxy_stdio@,@proxy_stdio@,g" \
+        -e "s,@proxy_syslog@,@proxy_syslog@,g" \
         -i /docker-entrypoint.sh
 
 ## Make container executable

@@ -62,6 +62,7 @@ RUN sed -e "s,@user@,www-data,g" \
         -e "s,@name@,lighttpd,g" \
         -e "s,@named@,lighttpd,g" \
         -e "s,@proxy_stdio@,1,g" \
+        -e "s,@proxy_syslog@,@proxy_syslog@,g" \
         -i /docker-entrypoint.sh \
         -i /etc/lighttpd/lighttpd.conf
 
