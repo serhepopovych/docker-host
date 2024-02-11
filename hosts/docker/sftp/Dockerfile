@@ -34,11 +34,13 @@ ARG data_dir=/data/.
 COPY openssh/sshd_config.d/sftp.conf \
      /etc/ssh/sshd_config.d/
 
+VOLUME /etc/ssh/hostkeys
+
 RUN H=/etc/ssh/ \
  && sed -e "s,@ip@,$ip,g" \
         -e "s,@data_dir@,${data_dir%/*},g" \
         -i "${H}sshd_config.d/sftp.conf" \
- && find "$H" -name 'ssh_host_*_key*' -a -type f -a -delete \
+ && find "$H" -maxdepth 1 -a -name 'ssh_host_*_key*' -a -type f -a -delete \
  && for t in rsa ecdsa ed25519; do \
         t="hostkeys${H}ssh_host_${t}_key" && \
         ln -sf "$t"     "$H" && \
