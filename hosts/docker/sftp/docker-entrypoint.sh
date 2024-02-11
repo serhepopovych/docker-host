@@ -406,17 +406,19 @@ rm -f "$pidfile" ||:
 /etc/init.d/$name start &
 oneshot="$!"
 
-pid=''
-
 # Wait for pid file
 secs=$timeout
 while :; do
-    if [ -s "$pidfile" ]; then
-        read -r pid _ <"$pidfile" &&
-            [ "$pid" -gt 0 ] 2>/dev/null || pid=''
+    if [ -s "$pidfile" ] && read -r pid _ <"$pidfile" &&
+       [ "$pid" -gt 0 ] 2>/dev/null
+    then
         break
+    fi
+    if [ $((secs -= 1)) -ge 0 ]; then
+        sleep 1
     else
-        [ $((secs -= 1)) -ge 0 ] && sleep 1 || break
+        pid=''
+        break
     fi
 done
 
