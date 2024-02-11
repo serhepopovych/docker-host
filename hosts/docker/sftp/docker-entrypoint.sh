@@ -21,25 +21,40 @@ assert_m()
     esac
 }
 
+# Usage: getpid <var>
+getpid()
+{
+    local var="${1:?missing 1st arg to getpid() <var>}"
+
+    # Use Linux specific /proc filesystem layout instead of $(exec sh ...)
+    # to avoid subshell spawning and receiving yet another SIGCHLD that we
+    # may care about with sig_handler().
+
+    if cd -P '/proc/self'; then
+        eval "$var='${PWD##*/}'"
+        cd "$OLDPWD"
+    fi
+}
+
 # Usage: mksleepfd
 mksleepfd()
 {
-    # Do not spawn multiple $sleepjob's
-    if [ -n "${sleepjob-}" ]; then
-        if kill -0 "${sleepjob-}" 2>/dev/null; then
+    local pid
+    getpid pid
+
+    # If running in job or subshell: can't use wait(1) on $sleepjob which is
+    # needed to implement interruptible by signals infinite sleep (blocking)
+
+    eval "sleepjob=\"\${sleepjob_$pid-}\""
+
+    if [ -n "$sleepjob" ]; then
+        if kill -0 "$sleepjob" 2>/dev/null; then
             return 0
         else
             unset -v sleepjob
             return 1
         fi
     fi
-
-    # Not using more secure mktemp(1) to avoid
-    # external dependency on it
-    local fl="/tmp/.sleepfd.$$"
-
-    # Use restrictive permissions to minimize race
-    mkfifo -m 0600 "$fl" || return
 
     # Usage: sleepfd_redirect_stdin
     sleepfd_redirect_stdin()
@@ -56,7 +71,7 @@ mksleepfd()
         # to open it for read and/or write:
         #
         #     $ readlink /proc/$sleepjob/fd/0
-        #     /tmp/.sleepfd.$$ (deleted)
+        #     /tmp/.sleepfd.$pid (deleted)
 
         local sleepfl="/proc/$sleepjob/fd/0"
 
@@ -76,7 +91,7 @@ mksleepfd()
             local _
             while IFS=''; do
                 # Consume all read(1) data from named pipe ignoring errors,
-                # if any; interruptible by signals.
+                # if any; NOT interruptible by signals (i.e. trap ... not run)
                 read -r _ 2>/dev/null || [ $? -gt 128 ] || break
             done
         else
@@ -99,31 +114,31 @@ mksleepfd()
         [ ! -p "$fl" ] || rm -f "$fl" ||:
     }
 
-    if rmfifo "$fl" && [ -n "${sleepjob-&}" ]; then
+    # Job control required
+    assert_m 'mksleepfd'
+
+    # Not using more secure mktemp(1) to avoid
+    # external dependency on it
+    local fl="/tmp/.sleepfd.$pid"
+
+    # Use restrictive permissions to minimize race
+    mkfifo -m 0600 "$fl" || return
+
+    sleepfd <>"$fl" &
+    eval "sleepjob_$pid=\"\$!\""
+
+    if rmfifo "$fl"; then
         # Not polluting callers namespace
         unset -f rmfifo
 
-        # Job control required
-        assert_m 'mksleepfd'
-
-        # File descriptors, especially standard input, inherited
-        # by child job running sleepfd(), but it will open named
-        # pipe through reference in our /proc/$$/fd/0 due to
-        # sanity checks against $sleepjob performed by sleepfd().
-
-        sleepfd &
-        sleepjob="$!"
-
         # Make sure $sleepjob is running or cleanup everything
         mksleepfd || return
-    else
-        # Will block here. Could be used in infinite sleep
-        # implementation that should set $sleepjob to empty.
-        sleepfd
-    fi <>"$fl"
 
-    # Above standard input redirect affects only `if' statement. On
-    # return from function it will be restored to callers one.
+        # Below standard input redirect affects only `if' statement on
+        # return from which it will be restored to the original one.
+        #
+        # It will block in open(2) until sleepfd() opens in read/write.
+    fi <"$fl"
 }
 
 # Usage: uptimex <var>
@@ -152,17 +167,20 @@ sleepx()
     # Usage: sleep_inf
     sleep_inf()
     {
-        # Do loop in case of $sleepjob isn't running:
-        # first mksleepfd() would unset it and next
-        # would establish internal pipe and block.
-
-        while :; do
-            local sleepjob="${sleepjob-}"
-
-            if mksleepfd; then
-                sleepfd
+        while mksleepfd; do
+            if wait "$sleepjob" 2>/dev/null; then
+                # It is not expected that $sleepjob terminates,
+                # especially with exit status 0
+                break
+            else
+                # interrupted by signal?
+                local rc=$?
+                [ $rc -gt 128 ] || exit $rc
             fi
         done
+
+        # Use same code as sleepfd()
+        exit 141
     }
 
     # Usage: sleep_num <secs> [<cb> [<args>...]]
@@ -180,10 +198,7 @@ sleepx()
             cb=':'
         fi
 
-        # This is bash(1) specific, readonly, variable (array)
-        local in_bash="${BASH_VERSINFO+yes}"
-
-        local now t rc _
+        local now t rc job
 
         local space="${oneshot:+ }"
         while "$cb" "$@"; do
@@ -196,39 +211,23 @@ sleepx()
                   ts=$now &&
                   [ $t -gt 0 ]
             do
-                # timeout ins't reached: sleep
+                # timeout ins't reached
+                sleep $t &
+                job="$!"
 
-                if [ -n "${in_bash}" ]; then
-                    # Do not redirect standard error to /dev/null, otherwise
-                    # it will hide all further shell command tracing (i.e.
-                    # set -x) output complicating debug process.
-                    read -t $t _ && rc=0 || rc=$?
-
-                    # interrupted by signals
-                    [ $rc -le 128 ] || continue
-                    # fallback to sleep(1) due to errors or data being read(1)
-                    in_bash=''
-                else
-                    # Job control required
-                    assert_m 'sleepx'
-
-                    # This spawns new process in this script interpreter
-                    # process group. Obviously this is suboptimal solution
-                    # as there might be a race with kill(1) that would end
-                    # sleep(1) before timeout reached.
-                    sleep $t &
-
-                    oneshot="${oneshot-}$space$! "
-                    while kill -0 $! 2>/dev/null; do
-                        # interruptible by signals
-                        wait $! || [ $? -le 128 ] || continue
-                        break
-                    done
-                    oneshot="${oneshot%$space$! }"
-                fi
+                oneshot="${oneshot-}$space$job "
+                while kill -0 "$job" 2>/dev/null; do
+                    # interruptible by signals
+                    wait "$job" || [ $? -le 128 ] || continue
+                    break
+                done
+                oneshot="${oneshot%$space$job }"
             done
         done
     }
+
+    # Job control required
+    assert_m 'sleepx'
 
     local secs=''
 
@@ -605,7 +604,7 @@ main()
 
     # Make sleep file descriptor to named pipe and redirect input
     if mksleepfd; then
-        jobs="$jobs$! "
+        jobs="$jobs$sleepjob "
         sleepfd_redirect_stdin
     fi
 
@@ -672,8 +671,8 @@ main()
         "$exe" "$@" ||:
 
         # This would block indefinitely to keep $stdout and $stderr
-        # open in this subshell preventing cat(1) readers from exit.
-        sleepx inf
+        # open in this subshell, preventing cat(1) readers from exit.
+        sleepfd
     }
 
     # Usage: start <exe> ...
@@ -684,8 +683,8 @@ main()
     }
 
     if [ -n "${stdout-}" ]; then
-       # Below output and error redirects affects only this `if' statement. On
-       # return from function it will be restored to callers one.
+       # Below output and error redirects affects only this `if' statement:
+       # on return from which they will be restored to the original ones.
        #
        # This will wake up cat(1) readers, started by $proxy_stdio, right after
        # both input and output file descriptors opened in write-only mode.
@@ -697,7 +696,7 @@ main()
         start "$@"
     fi
 
-    ## Wait for pid file
+    ## Main loop
 
     # Usage: cb ...
     cb()
@@ -712,25 +711,11 @@ main()
     }
     sleepx $timeout cb
 
-    ## Watch for main process
-
     if [ -n "$pid" ]; then
-        while kill -0 $pid; do
-            sleepx $timeout
-        done
+        sleepx inf
+    else
+        sig_handler 'TERM'
     fi
-
-    ## Exit by sending TERM signal to self
-
-    # Usage: cb ...
-    cb()
-    {
-        kill -TERM "$1" || return
-    }
-    sleepx $timeout cb $$
-
-    # Last restort
-    sig_handler_exit 125
 }
 
 if [ -n "${HIDE_ARGS+yes}" ]; then
