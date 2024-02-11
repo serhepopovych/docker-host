@@ -24,6 +24,8 @@ sleepx()
         cb="${cb:-:}"
 
         while "$cb" "$@"; do
+            [ $((secs -= 1)) -ge 0 ] || break
+
             # This spawns new process in this script interpreter
             # process group. Obviously this is suboptimal solution
             # as there might be a race with kill(1) that would end
@@ -36,8 +38,6 @@ sleepx()
                 wait $! || [ $? -le 128 ] || continue
                 break
             done
-
-            [ $((secs -= 1)) -gt 0 ] || break
         done
     fi
 }
@@ -411,20 +411,19 @@ rm -f "$pidfile" ||:
 oneshot="$!"
 
 # Wait for pid file
-secs=$timeout
-while :; do
+
+# Usage: cb ...
+cb()
+{
     if [ -s "$pidfile" ] && read -r pid _ <"$pidfile" &&
        [ "$pid" -gt 0 ] 2>/dev/null
     then
-        break
-    fi
-    if [ $((secs -= 1)) -ge 0 ]; then
-        sleep 1
+        return 1
     else
         pid=''
-        break
     fi
-done
+}
+sleepx $timeout cb
 
 # Watch for main process
 if [ -n "$pid" ]; then
