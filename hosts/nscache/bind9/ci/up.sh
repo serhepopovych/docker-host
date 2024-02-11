@@ -55,6 +55,8 @@ parse_args_usage()
   for system:
     --timezone=$timezone
         Timezone from /usr/share/zoneinfo/$timezone to configure
+    --locale=$locale
+        Locale from /etc/locale.gen to configure
 
   for bind9:
     --cache_volume_opts=$cache_volume_opts
@@ -75,11 +77,12 @@ parse_args_pre()
     eval "local ${app}_ip"
 
     eval "local ${app}_timezone"
+    eval "local ${app}_locale"
 
     eval "local ${app}_volume_cache_opts"
 
     read_profile_or_bail "$app" \
-        'timezone' \
+        'timezone' 'locale' \
         'volume_cache_opts' \
         #
 
@@ -89,6 +92,7 @@ parse_args_pre()
 
     # system
     eval "timezone=\"\${${app}_timezone:-US/Eastern}\""
+    eval "locale=\"\${${app}_locale:-en_US.UTF-8}\""
 
     # bind9
     eval "cache_volume_opts=\"\${${app}_volume_cache_opts:-size=2G}\""
@@ -99,7 +103,7 @@ parse_args_opt()
 {
     case "$1" in
         # system
-        --timezone=*)
+        --timezone=*|--locale=*)
             arg "$1" 'non-empty-value'
             ;;
 
@@ -134,6 +138,7 @@ up()
         --build-arg=host="$host" \
         \
         --build-arg=timezone="$timezone" \
+        --build-arg=locale="$locale" \
         #
 
     docker_volume \
@@ -151,12 +156,13 @@ up()
     eval "local ${app}_ip=\"\$ip\""
 
     eval "local ${app}_timezone=\"\$timezone\""
+    eval "local ${app}_locale=\"\$locale\""
 
     # bind9
     eval "local ${app}_volume_cache_opts=\"\$cache_volume_opts\""
 
     write_profile_or_fail "$app" \
-        'timezone' \
+        'timezone' 'locale' \
         'volume_cache_opts' \
         #
 }

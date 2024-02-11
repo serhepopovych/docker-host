@@ -58,6 +58,8 @@ parse_args_usage()
   for system:
     --timezone=$timezone
         Timezone from /usr/share/zoneinfo/$timezone to configure
+    --locale=$locale
+        Locale from /etc/locale.gen to configure
 
   for keeper:
     --glob_files=$glob_files
@@ -88,6 +90,7 @@ parse_args_pre()
     eval "local ${app}_ip"
 
     eval "local ${app}_timezone"
+    eval "local ${app}_locale"
 
     eval "local ${app}_glob_files"
     eval "local ${app}_keep_days"
@@ -98,7 +101,7 @@ parse_args_pre()
     eval "local ${app}_volume_storage_opts"
 
     read_profile_or_bail "$app" \
-        'timezone' \
+        'timezone' 'locale' \
         'glob_files' 'keep_days' \
         'volume_target_name' 'volume_storage_name' \
         'volume_target_opts' 'volume_storage_opts' \
@@ -110,6 +113,7 @@ parse_args_pre()
 
     # system
     eval "timezone=\"\${${app}_timezone:-US/Eastern}\""
+    eval "locale=\"\${${app}_locale:-en_US.UTF-8}\""
 
     # keeper
     eval "glob_files=\"\${${app}_glob_files-*.wav}\""
@@ -136,7 +140,7 @@ parse_args_opt()
 {
     case "$1" in
         # system
-        --timezone=*)
+        --timezone=*|--locale=*)
             arg "$1" 'non-empty-value'
             ;;
 
@@ -176,6 +180,7 @@ up()
 
     docker_build "$build_args" \
         --build-arg=timezone="$timezone" \
+        --build-arg=locale="$locale" \
         \
         --build-arg=target="$volume_target_path" \
         --build-arg=storage="$volume_storage_path" \
@@ -212,6 +217,7 @@ up()
     eval "local ${app}_ip=\"\$ip\""
 
     eval "local ${app}_timezone=\"\$timezone\""
+    eval "local ${app}_locale=\"\$locale\""
 
     eval "local ${app}_glob_files=\"\$glob_files\""
     eval "local ${app}_keep_days=\"\$keep_days\""
@@ -222,7 +228,7 @@ up()
     eval "local ${app}_volume_storage_opts=\"\$volume_storage_opts\""
 
     write_profile_or_fail "$app" \
-        'timezone' \
+        'timezone' 'locale' \
         'glob_files' 'keep_days' \
         'volume_target_name' 'volume_storage_name' \
         'volume_target_opts' 'volume_storage_opts' \

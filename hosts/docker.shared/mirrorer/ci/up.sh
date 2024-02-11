@@ -55,6 +55,8 @@ parse_args_usage()
   for system:
     --timezone=$timezone
         Timezone from /usr/share/zoneinfo/$timezone to configure
+    --locale=$locale
+        Locale from /etc/locale.gen to configure
 
   for mirrorer:
     --lftp_url=$lftp_url
@@ -84,6 +86,7 @@ parse_args_pre()
     eval "local ${app}_ip"
 
     eval "local ${app}_timezone"
+    eval "local ${app}_locale"
 
     eval "local ${app}_lftp_url"
     eval "local ${app}_lftp_host"
@@ -91,7 +94,7 @@ parse_args_pre()
     eval "local ${app}_lftp_pass"
 
     read_profile_or_bail "$app" \
-        'timezone' \
+        'timezone' 'locale' \
         'lftp_url' 'lftp_host' 'lftp_user' 'lftp_pass' \
         'volume_target_opts' \
         #
@@ -102,6 +105,7 @@ parse_args_pre()
 
     # system
     eval "timezone=\"\${${app}_timezone:-US/Eastern}\""
+    eval "locale=\"\${${app}_locale:-en_US.UTF-8}\""
 
     # mirrorer
     eval "lftp_url=\"\${${app}_lftp_url:-ftp://ftp.example.com/data}\""
@@ -122,7 +126,7 @@ parse_args_opt()
 {
     case "$1" in
         # system
-        --timezone=*)
+        --timezone=*|--locale=*)
             arg "$1" 'non-empty-value'
             ;;
 
@@ -162,6 +166,7 @@ up()
 
     docker_build "$build_args" \
         --build-arg=timezone="$timezone" \
+        --build-arg=locale="$locale" \
         \
         --build-arg=inst="${__host}" \
         \
@@ -186,6 +191,7 @@ up()
     eval "local ${app}_ip=\"\$ip\""
 
     eval "local ${app}_timezone=\"\$timezone\""
+    eval "local ${app}_locale=\"\$locale\""
 
     eval "local ${app}_lftp_url=\"\$lftp_url\""
     eval "local ${app}_lftp_host=\"\$lftp_host\""
@@ -195,7 +201,7 @@ up()
     eval "local ${app}_volume_target_opts=\"\$volume_target_opts\""
 
     write_profile_or_fail "$app" \
-        'timezone' \
+        'timezone' 'locale' \
         'lftp_url' 'lftp_host' 'lftp_user' 'lftp_pass' \
         'volume_target_opts' \
         #

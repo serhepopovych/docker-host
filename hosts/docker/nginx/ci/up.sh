@@ -55,6 +55,8 @@ parse_args_usage()
   for system:
     --timezone=$timezone
         Timezone from /usr/share/zoneinfo/$timezone to configure
+    --locale=$locale
+        Locale from /etc/locale.gen to configure
 
   for nginx:
     --cache_volume_opts=$cache_volume_opts
@@ -83,6 +85,7 @@ parse_args_pre()
     eval "local ${app}_ip"
 
     eval "local ${app}_timezone"
+    eval "local ${app}_locale"
 
     eval "local ${app}_volume_cache_opts"
 
@@ -91,7 +94,7 @@ parse_args_pre()
     eval "local ${app}_cbtsh_ph"
 
     read_profile_or_bail "$app" \
-        'timezone' \
+        'timezone' 'locale' \
         'volume_cache_opts' \
         'cbtsh_http_url' 'cbtsh_http_auth' 'cbtsh_ph' \
         #
@@ -102,6 +105,7 @@ parse_args_pre()
 
     # system
     eval "timezone=\"\${${app}_timezone:-US/Eastern}\""
+    eval "locale=\"\${${app}_locale:-en_US.UTF-8}\""
 
     # nginx
     eval "cache_volume_opts=\"\${${app}_volume_cache_opts:-size=2G}\""
@@ -118,7 +122,7 @@ parse_args_opt()
 {
     case "$1" in
         # system
-        --timezone=*)
+        --timezone=*|--locale=*)
             arg "$1" 'non-empty-value'
             ;;
 
@@ -188,6 +192,7 @@ up()
 
     docker_build "$build_args" \
         --build-arg=timezone="$timezone" \
+        --build-arg=locale="$locale" \
         \
         --build-arg=ngx_hostname="${__host}" \
         \
@@ -215,6 +220,7 @@ up()
     eval "local ${app}_ip=\"\$ip\""
 
     eval "local ${app}_timezone=\"\$timezone\""
+    eval "local ${app}_locale=\"\$locale\""
 
     eval "local ${app}_volume_cache_opts=\"\$cache_volume_opts\""
 
@@ -223,7 +229,7 @@ up()
     eval "local ${app}_cbtsh_ph=\"\$cbtsh_ph\""
 
     write_profile_or_fail "$app" \
-        'timezone' \
+        'timezone' 'locale' \
         'volume_cache_opts' \
         'cbtsh_http_url' 'cbtsh_http_auth' 'cbtsh_ph' \
         #

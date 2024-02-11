@@ -50,6 +50,8 @@ parse_args_usage()
   for system:
     --timezone=$timezone
         Timezone from /usr/share/zoneinfo/$timezone to configure
+    --locale=$locale
+        Locale from /etc/locale.gen to configure
 
 EOF
 }
@@ -67,9 +69,10 @@ parse_args_pre()
     eval "local ${app}_ip"
 
     eval "local ${app}_timezone"
+    eval "local ${app}_locale"
 
     read_profile_or_bail "$app" \
-        'timezone' \
+        'timezone' 'locale' \
         #
 
     # network
@@ -78,6 +81,7 @@ parse_args_pre()
 
     # system
     eval "timezone=\"\${${app}_timezone:-US/Eastern}\""
+    eval "locale=\"\${${app}_locale:-en_US.UTF-8}\""
 }
 
 # Usage: parse_args_opt --<name>=[<value>]
@@ -85,7 +89,7 @@ parse_args_opt()
 {
     case "$1" in
         # system
-        --timezone=*)
+        --timezone=*|--locale=*)
             arg "$1" 'non-empty-value'
             ;;
 
@@ -113,6 +117,7 @@ up()
 
     docker_build "$build_args" \
         --build-arg=timezone="$timezone" \
+        --build-arg=locale="$locale" \
         #
 
     docker_run "$run_args" \
@@ -127,9 +132,10 @@ up()
     eval "local ${app}_ip=\"\$ip\""
 
     eval "local ${app}_timezone=\"\$timezone\""
+    eval "local ${app}_locale=\"\$locale\""
 
     write_profile_or_fail "$app" \
-        'timezone' \
+        'timezone' 'locale' \
         #
 }
 

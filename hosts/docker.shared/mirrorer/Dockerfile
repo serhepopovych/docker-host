@@ -6,7 +6,8 @@ FROM ubuntu:$UBUNTU_TAG
 RUN apt-get -qq update \
     && apt-get -qq dist-upgrade \
     && apt-get -qq --no-install-recommends --no-install-suggests install \
-       apt-utils ca-certificates tzdata curl gnupg lsof vim-tiny nano less
+       apt-utils ca-certificates tzdata locales curl gnupg lsof vim-tiny \
+       nano less
 
 ## Configure timezone
 
@@ -20,6 +21,15 @@ RUN for timezone in "$timezone" 'US/Eastern' 'Etc/UTC'; do \
         break; \
       fi; \
     done
+
+## Configure locale
+
+ARG locale=en_US.UTF-8
+
+RUN sed -e "s,^#\s*\($locale\(\s\+.\+\)\?\)\s*$,\1,g" \
+        -i /etc/locale.gen && \
+    locale-gen && \
+    update-locale "LANG=$locale"
 
 ## Install nodejs & pm2
 

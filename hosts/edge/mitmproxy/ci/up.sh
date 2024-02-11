@@ -60,6 +60,8 @@ parse_args_usage()
   for system:
     --timezone=$timezone
         Timezone from /usr/share/zoneinfo/$timezone to configure
+    --locale=$locale
+        Locale from /etc/locale.gen to configure
 
   for mitmproxy:
     --oba_hostname=$oba_hostname
@@ -95,6 +97,7 @@ parse_args_pre()
     eval "local ${app}_ip"
 
     eval "local ${app}_timezone"
+    eval "local ${app}_locale"
 
     eval "local ${app}_oba_hostname"
 
@@ -107,7 +110,7 @@ parse_args_pre()
     eval "local ${app}_web_port"
 
     read_profile_or_bail "$app" \
-        'timezone' \
+        'timezone' 'locale' \
         'oba_hostname' \
         'listen_host' 'listen_port' \
         'volume_opts' \
@@ -120,6 +123,7 @@ parse_args_pre()
 
     # system
     eval "timezone=\"\${${app}_timezone:-US/Eastern}\""
+    eval "locale=\"\${${app}_locale:-en_US.UTF-8}\""
 
     # mitmproxy
     eval "oba_hostname=\"\${${app}_oba_hostname:-mitm.it}\""
@@ -139,7 +143,7 @@ parse_args_opt()
 {
     case "$1" in
         # system
-        --timezone=*)
+        --timezone=*|--locale=*)
             arg "$1" 'non-empty-value'
             ;;
 
@@ -185,6 +189,7 @@ up()
 
     docker_build "$build_args" \
         --build-arg=timezone="$timezone" \
+        --build-arg=locale="$locale" \
         \
         --build-arg=data_dir="$data_volume_path" \
         \
@@ -223,6 +228,7 @@ up()
     eval "local ${app}_ip=\"\$ip\""
 
     eval "local ${app}_timezone=\"\$timezone\""
+    eval "local ${app}_locale=\"\$locale\""
 
     eval "local ${app}_oba_hostname=\"\$oba_hostname\""
 
@@ -235,7 +241,7 @@ up()
     eval "local ${app}_web_port=\"\$web_port\""
 
     write_profile_or_fail "$app" \
-        'timezone' \
+        'timezone' 'locale' \
         'oba_hostname' \
         'listen_host' 'listen_port' \
         'volume_opts' \
