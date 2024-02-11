@@ -95,11 +95,13 @@ COPY nginx/inc.d/*.inc /etc/nginx/inc.d/
 COPY nginx/root/* $data_dir/root/
 COPY nginx/app/nginx.sh /usr/sbin/
 
-RUN ln -sf '/dev/stderr.nginx' '/var/log/nginx/error.log' \
- && ln -sf '/dev/stdout.nginx' '/var/log/nginx/access.log' \
- && sed -e "s,@user@,nginx,g" \
+RUN sed -e "s,@user@,nginx,g" \
+        -e "s,@name@,nginx,g" \
+        -e "s,@named@,nginx,g" \
         -e "s,@proxy_stdio@,1,g" \
+        -e "s,@proxy_syslog@,@proxy_syslog@,g" \
         -i /usr/sbin/nginx.sh \
+ && ln -sf . /run/nginx \
  && for t in 'conf' 'inc'; do \
         find "/etc/nginx/$t.d/" -name "*.$t" -type f -a -execdir \
             sed -e "s,@ngx_hostname@,$ngx_hostname,g" \
@@ -121,5 +123,8 @@ WORKDIR /root
 COPY ecosystem.config.js.templ ./
 
 ## Make container executable
+
+STOPSIGNAL SIGTERM
+ENV PM2_KILL_SIGNAL=SIGTERM
 
 ENTRYPOINT [ "/docker-entrypoint.sh" ]
