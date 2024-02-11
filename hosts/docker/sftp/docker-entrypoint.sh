@@ -3,50 +3,218 @@
 # Requires: nc.openbsd(1), gawk(1), chroot(1), sleep(1), mkfifo(1), cat(1)
 #           chown(1), rm(1)
 
-# Usage: sleepx <secs> [<cb> [<args>...]]
-sleepx()
+# Usage: mksleepfd
+mksleepfd()
 {
-    local space=''
-
-    local secs="${1-}"
-    [ "$secs" -ge 0 -a "$secs" -le 2147483647 ] 2>/dev/null ||
-        "${space:?missing or not valid number 1st arg to sleepx() <secs>}"
-
-    local cb="${2-}"
-    cb="${cb#:}"
-    [ $# -lt 2 ] || shift 2
-
-    local nr=1
-    if [ -z "$cb" ]; then
-        nr=$secs
-        cb=':'
+    # Do not spawn multiple $sleepjob's
+    if [ -n "${sleepjob-}" ]; then
+        if kill -0 "${sleepjob-}" 2>/dev/null; then
+            return 0
+        else
+            unset -v sleepjob sleepfl
+            return 1
+        fi
     fi
 
-    # This is bash(1) specific, readonly, variable (array)
-    local in_bash="${BASH_VERSINFO+yes}"
+    # Not using more secure mktemp(1) to avoid
+    # external dependency on it
+    local fl="/tmp/.mksleepfd.$$"
 
-    space="${oneshot:+ }"
-    while "$cb" "$@"; do
-        [ $((secs -= nr)) -ge 0 ] || break
+    # Use restrictive permissions to minimize race
+    mkfifo -m 0600 "$fl" || return
 
-        if [ -n "${in_bash}" ]; then
-            read -t $nr ||:
-        else
-            # This spawns new process in this script interpreter
-            # process group. Obviously this is suboptimal solution
-            # as there might be a race with kill(1) that would end
-            # sleep(1) before timeout reached.
-            sleep $nr &
+    # This will sleep in read(2). Opening named pipe only for reading
+    # or writing would block until opened in opposide direction.
+    #
+    # Furthermore file descriptors opened only for reading would
+    # receive EOF when last write file descriptor being closed.
+    #
+    # Thus open as read and write. Writes to this file descriptor
+    # would be consumed making it to behave like /dev/null without
+    # any impact on $sleepjob.
 
-            oneshot="${oneshot-}$space$! "
-            while :; do
-                # interruptible by signals
-                wait $! || [ $? -le 128 ] || continue
-                break
-            done
-            oneshot="${oneshot%$space$! }"
-        fi
+    while IFS=''; do
+        # interruptible by signals
+        read _ ||:
+    done <>"$fl" &
+
+    sleepjob="$!"
+
+    # Wait for job to come up with open fd. Linux specific
+    sleepfl="/proc/$sleepjob/fd/0"
+
+    while kill -0 "$sleepjob" &&
+        [ ! "$sleepfl" -ef "$fl" ]
+    do
+        # No means to sleep here reliably/safely: busy loop
+        echo >"$fl"
     done
+
+    # Remove from filesystem to make sure no one writes to
+    # it, wakes read(1) and causes us to exit.
+    #
+    # Note that on Linux /proc/$!/fd/0 points to deleted fifo
+    # making possible for third-party processes with rights
+    # to open it for read and/or write:
+    #
+    #     $ readlink /proc/$!/fd/0
+    #     /tmp/.mksleepfd.$$ (deleted)
+    #
+    # Do not treat as fatal error in case of unlink(2) error.
+    rm -f "$fl" ||:
+
+    # Make sure $sleepjob is running or cleanup everything
+    mksleepfd || return
+}
+
+# Usage: uptimex <var>
+uptimex()
+{
+    local var="${1:?missing 1st arg to uptimex() <var>}"
+
+    # This could be used to measure time intervals when
+    # precision up to a second is enough, without
+    # spawning subshell, that might have side effects in
+    # some configurations (e.g. trigger SIGCHLD handler
+    # on subshell exit).
+    local _
+    read $var _ <'/proc/uptime' || return
+    eval "$var=\"\${$var%%.*}\""
+}
+
+# Usage: sleepx [inf|<secs> [<cb> [<args>...]]]
+sleepx()
+{
+    # Do earlier because some time being spent while
+    # processing commands until second `uptimex now'.
+    local ts
+    uptimex ts || return 0
+
+    # Usage: sleep_inf
+    sleep_inf()
+    {
+        if [ -n "${sleepjob-}" ]; then
+            # Is there $sleepjob running?
+            if mksleepfd; then
+                local _
+                while IFS=''; do
+                    # interruptible by signals
+                    read _ ||:
+                done <"$sleepfl"
+            fi
+        fi
+
+        if [ -z "${sleepjob-}" ]; then
+            # Stripped down version of mksleepfd()
+            local fl="/tmp/.sleep_inf.$$"
+
+            mkfifo -m 0600 "$fl" || return
+            {
+                # File descriptor opened, can try to remove
+                # filesystem entry with unlink(2)
+                rm -f "$fl" ||:
+
+                local _
+                while IFS=''; do
+                    # interruptible by signals
+                    read _ ||:
+                done
+            } <>"$fl"
+        fi
+
+        # If reached, exit with 128 + SIGPIPE to indicate
+        # that read(1) from broken file descriptor
+        exit 141
+    }
+
+    # Usage: sleep_num <secs> [<cb> [<args>...]]
+    sleep_num()
+    {
+        local secs="${1-}"
+
+        local cb="${2-}"
+        cb="${cb#:}"
+        [ $# -lt 2 ] || shift 2
+
+        local nr=1
+        if [ -z "$cb" ]; then
+            [ $secs -le 0 ] || nr=$secs
+            cb=':'
+        fi
+
+        # This is bash(1) specific, readonly, variable (array)
+        local in_bash="${BASH_VERSINFO+yes}"
+
+        local now t rc _
+
+        local space="${oneshot:+ }"
+        while "$cb" "$@"; do
+            [ $((secs -= nr)) -ge 0 ] || break
+
+            t=$nr
+
+            while uptimex now &&
+                  t=$((t - (now - ts))) &&
+                  ts=$now &&
+                  [ $t -gt 0 ]
+            do
+                # timeout ins't reached: sleep
+
+                if [ -n "${in_bash}" ]; then
+                    # Do not redirect standard error to /dev/null, otherwise
+                    # it will hide all further shell command tracing (i.e.
+                    # set -x) output complicating debug process.
+                    read -t $t _ && rc=0 || rc=$?
+
+                    # interrupted by signals
+                    [ $rc -le 128 ] || continue
+                    # fallback to sleep(1) due to errors or data being read(1)
+                    in_bash=''
+                else
+                    # This spawns new process in this script interpreter
+                    # process group. Obviously this is suboptimal solution
+                    # as there might be a race with kill(1) that would end
+                    # sleep(1) before timeout reached.
+                    sleep $t &
+
+                    oneshot="${oneshot-}$space$! "
+                    while kill -0 $! 2>/dev/null; do
+                        # interruptible by signals
+                        wait $! || [ $? -le 128 ] || continue
+                        break
+                    done
+                    oneshot="${oneshot%$space$! }"
+                fi
+            done
+        done
+    }
+
+    local secs=''
+
+    # See how we're called
+    case "${1-}" in
+        '')
+            "${secs:?usage: sleepx [inf|<secs> [<cb> [<args>...]]}"
+            ;;
+        [Ii][Nn][Ff])
+            [ $# -le 1 ] ||
+            "${secs:?extra args after $1, usage: sleepx inf}"
+
+            sleep_inf
+            ;;
+        *[!0-9]*)
+            "${secs:?not a valid unsigned number of seconds to sleep}"
+            ;;
+        *)
+            [ $1 -lt 2147483648 ] ||
+            "${secs:?seconds to sleep should be less than 2147483648}"
+
+            sleep_num "$@"
+            ;;
+    esac
+
+    # Do not expose to the caller namespace
+    unset -f sleep_inf sleep_num
 }
 
 # Usage: syslog_cat {</path/to/socket1> ...|<SEP/path/to/socket1SEP...>}
@@ -240,7 +408,15 @@ sig_handler()
 
     case "$signal" in
         'CHLD')
-            # Our main and supplementary jobs running?
+            # Make sure main process and jobs it depend on is running,
+            # resuming in case they was suspend. Note that this signal
+            # triggered for any child process, including external tools
+            # and subshells, spawned by this script, so this might be
+            # quite hotpoint even in case all code does is sleepx().
+            #
+            # Thus it is suggested to not to run any external tools or
+            # subshells while waiting for main process, especially in
+            # sleepx() helper that should not spawn processes at all.
             local p
             for p in $pid $jobs ''; do
                 kill -CONT $p 2>/dev/null || break
@@ -364,7 +540,7 @@ readonly \
 # Turn on job control to put each job into separage process group
 set -m
 
-# Spawn child processes
+# Setup signal handlers early
 trap 'sig_handler TERM' TERM
 trap 'sig_handler INT' INT
 trap 'sig_handler QUIT' QUIT
@@ -375,12 +551,18 @@ trap 'sig_handler CHLD' CHLD
 
 jobs=''
 
+# Make sleep file descriptor to named pipe and redirect input
+if mksleepfd; then
+    jobs="$jobs$! "
+    exec <"$sleepfl"
+fi
+
 # Proxy stdandard output and error using named pipe to allow
 # daemon to write to them after switching user (e.g. using gosu)
 if [ -n "${proxy_stdio#\@proxy_stdio\@}" ]; then
     readonly \
-        stdout='/dev/stdout' \
-        stderr='/dev/stderr' \
+        stdout="/dev/stdout.$name" \
+        stderr="/dev/stderr.$name" \
         #
 
     # Remove original symlinks
@@ -396,12 +578,14 @@ if [ -n "${proxy_stdio#\@proxy_stdio\@}" ]; then
     cat "$stderr" >&2 &
     jobs="$jobs$! "
 
-    # This serves two purposes:
-    #  1) reopens file descriptors to point to named pipes making them
-    #     available to child processes and via /proc/*/fd/*
-    #  2) opens writers to avoid sending EOF after last writer exits
-    #     (e.g. single echo >/dev/stdout will cause cat(1) exit)
-    exec >"$stdout" 2>"$stderr"
+    {
+        # This would block until cat(1) opens for reading.
+        exec >"$stdout" 2>"$stderr"
+        # This would block indefinitely to keep $stdout and $stderr
+        # open in this subshell preventing cat(1) readers from EOF.
+        sleepx inf
+    } &
+    jobs="$jobs$! "
 fi
 
 # Proxy syslog to either standard error or output file descriptor that
@@ -420,7 +604,12 @@ fi
 rm -f "$pidfile" ||:
 
 # Run through SysV init script
-/etc/init.d/$name start &
+{
+    eval "${stdout+exec  >'$stdout'}"
+    eval "${stderr+exec 2>'$stderr'}"
+
+    exec /etc/init.d/$name start
+} &
 oneshot="$!"
 
 # Wait for pid file
