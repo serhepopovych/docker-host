@@ -11,7 +11,8 @@ install -d "$GUACAMOLE_HOME" ||:
 # Usage: guacamole_ldap_servers_yml
 guacamole_ldap_servers_yml()
 {
-    local ldap_hostname="${LDAP_HOSTNAME:?missing LDAP_HOSTNAME= in environment}"
+    local ldap_hostname="${LDAP_HOSTNAME-}"
+    [ -n "$ldap_hostname" ] || return 0
 
     getent ahosts "$ldap_hostname" | {
         # Make network-timeout and operation-timeout given in seconds time unit
